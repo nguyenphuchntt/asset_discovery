@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"os"
 
+	"passivediscovery/internal/capture"
 	"passivediscovery/internal/config"
+	"passivediscovery/internal/decode"
 	internallog "passivediscovery/internal/log"
 )
 
@@ -26,18 +28,22 @@ func run(args []string) error {
 		fmt.Fprintln(os.Stderr, config.Usage())
 		return err
 	}
-
-	logger, err := internallog.New(cfg.LogLevel)
+	logger, err := internallog.NewLogger(cfg.LogLevel)
 	if err != nil {
+		fmt.Print(config.Usage())
 		return err
 	}
 
-	logger.Info(
-		"config parsed successfully",
-		"pcap", cfg.PCAPPath,
-		"log_level", cfg.LogLevel,
-		"bpf", cfg.BPF,
-	)
+	fileSource, err := capture.NewFileSource(cfg.PCAPPath)
+	decoder := decode.NewDecoder()
+	for packet := range fileSource.Packets() {
+		decodedPacket, ok := decoder.Decode(packet)
+		if ok {
+			fmt.Print(decodedPacket, "\n")
+		}
+	}
 
+	logger.Info("finished!")
 	return nil
 }
+

@@ -7,7 +7,7 @@ import (
 	"os"
 )
 
-func New(level string) (*slog.Logger, error) {
+func NewLogger(level string) (*slog.Logger, error) {
 	level = strings.ToLower(strings.TrimSpace(level))
 
 	slogLevel, err := parseLevel(level)

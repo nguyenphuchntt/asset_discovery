@@ -3,6 +3,7 @@ package decode
 import (
 	"net"
 	"time"
+	"fmt"
 )
 
 type PacketType string
@@ -36,4 +37,12 @@ type DecodedPacket struct {
 	Ethernet *EthernetInfo
 	ARP      *ARPInfo
 	DHCP     *DHCPInfo
+}
+
+func (dp DecodedPacket) String() string {
+	return fmt.Sprintf(
+		"Type=%v Seen=%v",
+		dp.Type,
+		dp.SeenTime,
+	)
 }
