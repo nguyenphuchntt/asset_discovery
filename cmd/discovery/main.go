@@ -1,3 +1,14 @@
+// main.go is the process entrypoint for the passive discovery service.
+//
+// Long-term responsibilities:
+//   - parse configuration and initialize logging;
+//   - choose PCAP mode or live capture mode;
+//   - wire pipeline.Runner with capture, decode, analyzers, asset manager,
+//     lifecycle, persistence, stats, and API;
+//   - handle process exit codes and user-facing startup errors.
+//
+// Current code is still an early PCAP decoder path and will be replaced by the
+// pipeline package once the runtime skeleton is implemented.
 package main
 
 import (
@@ -52,4 +63,3 @@ func run(args []string) error {
 	logger.Info("finished!")
 	return nil
 }
-

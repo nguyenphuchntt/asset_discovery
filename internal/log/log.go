@@ -1,10 +1,17 @@
+// log.go owns logger construction for the service.
+//
+// Long-term responsibilities:
+// - configure slog level and output destination;
+// - keep logs structured enough for demo and troubleshooting;
+// - avoid mixing logging policy into packet processing packages;
+// - later support JSON/text mode if deployment needs it.
 package log
 
 import (
-	"strings"
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 )
 
 func NewLogger(level string) (*slog.Logger, error) {

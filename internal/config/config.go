@@ -1,3 +1,10 @@
+// config.go currently parses the minimal CLI config used by the prototype.
+//
+// Long-term responsibilities for this file/package:
+//   - define the canonical Config struct used by cmd/discovery and pipeline;
+//   - combine flags, environment defaults, and validation;
+//   - support PCAP/live modes, BPF, database path, API address, lifecycle
+//     thresholds, persistence intervals, analyzer mode, and output format.
 package config
 
 import (
@@ -26,8 +33,8 @@ func Parse(args []string) (*Config, error) {
 		BPF:      DefaultBPF, // Berkeley Packet Filter
 	}
 
-	fs := flag.NewFlagSet("discovery", flag.ContinueOnError) // Return a descriptive error 
-	fs.SetOutput(io.Discard) // ignore default error output
+	fs := flag.NewFlagSet("discovery", flag.ContinueOnError) // Return a descriptive error
+	fs.SetOutput(io.Discard)                                 // ignore default error output
 	fs.StringVar(&cfg.PCAPPath, "pcap", cfg.PCAPPath, "absolute path to input PCAP file")
 	fs.StringVar(&cfg.LogLevel, "log-level", cfg.LogLevel, "log level: debug, info, warn, error")
 	fs.StringVar(&cfg.BPF, "bpf", cfg.BPF, "BPF filter for packet capture")

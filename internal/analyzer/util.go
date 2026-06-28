@@ -1,3 +1,8 @@
+// util.go contains analyzer-local helpers.
+//
+// Helpers here should stay small and protocol-focused, such as MAC usability
+// checks and human-readable operation names. Shared domain normalization should
+// live in internal/asset instead.
 package analyzer
 
 import "net"
@@ -23,4 +28,11 @@ func arpOperationName(operation uint16) (string, error) {
 	default:
 		return "unknown", nil
 	}
+}
+
+func appendIfNotEmpty(values []string, value string) []string {
+	if value == "" {
+		return values
+	}
+	return append(values, value)
 }

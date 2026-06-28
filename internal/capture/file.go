@@ -1,3 +1,11 @@
+// file.go implements offline PCAP capture.
+//
+// Responsibilities:
+// - open a PCAP/PCAPNG file for read-only packet replay;
+// - emit every packet into the capture channel;
+// - maintain read stats;
+// - close handles cleanly at EOF or shutdown;
+// - later apply configured BPF when offline filtering is requested.
 package capture
 
 import (
