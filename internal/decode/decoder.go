@@ -1,7 +1,10 @@
 package decode
 
 import (
+	// "encoding/binary"
+	// "encoding/hex"
 	"net"
+	// "strings"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
@@ -64,11 +67,11 @@ func decodeARP(decodedPacket *DecodedPacket, packet gopacket.Packet) bool {
 
 		decodedPacket.Type = PacketARP
 		decodedPacket.ARP = &ARPInfo{
-			SenderMAC: cloneHardwareAddr(arp.SourceHwAddress),
-			SenderIP:  cloneIP(arp.SourceProtAddress),
-			TargetMAC: cloneHardwareAddr(arp.DstHwAddress),
-			TargetIP:  cloneIP(arp.DstProtAddress),
-			Operation: arp.Operation, // 1 request | 2 reply
+			SenderMAC:  cloneHardwareAddr(arp.SourceHwAddress),
+			SenderIPv4: cloneIPv4(arp.SourceProtAddress),
+			TargetMAC:  cloneHardwareAddr(arp.DstHwAddress),
+			TargetIPv4: cloneIPv4(arp.DstProtAddress),
+			Operation:  arp.Operation, // 1 request | 2 reply
 		}
 
 		return true
@@ -88,12 +91,24 @@ func decodeDHCP(decodedPacket *DecodedPacket, packet gopacket.Packet) bool {
 			return false
 		}
 
-		decodedPacket.Type = PacketDHCP
-		decodedPacket.DHCP = &DHCPInfo{
-			ClientMAC: cloneHardwareAddr(dhcp.ClientHWAddr),
+		decodedPacket.Type = PacketDHCPv4
+		decodedPacket.DHCPv4 = &DHCPv4Info{
+			ClientMAC:       cloneHardwareAddr(dhcp.ClientHWAddr),
+			ClientIPv4:      cloneIPv4(dhcp.ClientIP),
+			AssignedIPv4:    cloneIPv4(dhcp.YourClientIP),
+			RequestedIPv4:   dhcpOptionIPv4(dhcp, layers.DHCPOptRequestIP),
+			Hostname:        dhcpOptionString(dhcp, layers.DHCPOptHostname),
+			DHCPMessageType: dhcpOptionUint16(dhcp, layers.DHCPOptMessageType),
+			VendorClass:     dhcpOptionString(dhcp, layers.DHCPOptClassID),
 		}
 
 		return true
+	}
+
+	if dhcpLayer := packet.Layer(layers.LayerTypeDHCPv6); dhcpLayer != nil {
+		// TODO: Re-enable DHCPv6 after the asset identity model for DUID,
+		// NDP, and MAC correlation is finalized.
+		return false
 	}
 
 	return false
@@ -106,9 +121,46 @@ func cloneHardwareAddr(addr net.HardwareAddr) net.HardwareAddr {
 	return append(net.HardwareAddr(nil), addr...) // unpack
 }
 
-func cloneIP(ip net.IP) net.IP {
-	if ip == nil {
+func cloneIPv4(ip net.IP) net.IP {
+	ip4 := ip.To4()
+	if ip4 == nil {
 		return nil
 	}
-	return append(net.IP(nil), ip...)
+	return append(net.IP(nil), ip4...)
+}
+
+func dhcpOptionString(dhcp *layers.DHCPv4, optionType layers.DHCPOpt) string {
+	option, ok := findDHCPOption(dhcp, optionType)
+	if !ok || len(option.Data) == 0 {
+		return ""
+	}
+	return string(option.Data)
+}
+
+func dhcpOptionIPv4(dhcp *layers.DHCPv4, optionType layers.DHCPOpt) net.IP {
+	option, ok := findDHCPOption(dhcp, optionType)
+	if !ok || len(option.Data) < 4 {
+		return nil
+	}
+	return cloneIPv4(net.IP(option.Data[:4]))
+}
+
+func dhcpOptionUint16(dhcp *layers.DHCPv4, optionType layers.DHCPOpt) uint16 {
+	option, ok := findDHCPOption(dhcp, optionType)
+	if !ok || len(option.Data) == 0 {
+		return 0
+	}
+	return uint16(option.Data[0])
+}
+
+func findDHCPOption(dhcp *layers.DHCPv4, optionType layers.DHCPOpt) (layers.DHCPOption, bool) {
+	if dhcp == nil {
+		return layers.DHCPOption{}, false
+	}
+	for _, option := range dhcp.Options {
+		if option.Type == optionType {
+			return option, true
+		}
+	}
+	return layers.DHCPOption{}, false
 }

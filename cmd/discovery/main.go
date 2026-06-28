@@ -35,6 +35,12 @@ func run(args []string) error {
 	}
 
 	fileSource, err := capture.NewFileSource(cfg.PCAPPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Cannot open PCAP file!")
+		return err
+	}
+	defer fileSource.Close()
+
 	decoder := decode.NewDecoder()
 	for packet := range fileSource.Packets() {
 		decodedPacket, ok := decoder.Decode(packet)
