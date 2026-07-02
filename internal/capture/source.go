@@ -1,19 +1,42 @@
-// source.go defines the capture source contract.
-//
-// A Source is the only runtime component allowed to read packets from PCAP or a
-// network interface. It must not send packets. Downstream packages should only
-// depend on this interface, not on libpcap details.
 package capture
 
-import "github.com/google/gopacket"
+import (
+	"context"
+	"time"
 
-type Stats struct {
-	Received int
-	Dropped  int
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/layers"
+)
+
+type SourceKind string
+
+const (
+	SourceKindFile SourceKind = "file"
+	SourceKindLive SourceKind = "live"
+)
+
+type RawPacket struct {
+	Packet        gopacket.Packet
+	SourceName    string
+	SourceKind    SourceKind
+	CapturedAt    time.Time
+	Length        int
+	CaptureLength int
+	LinkType      layers.LinkType
+}
+
+type CaptureStats struct {
+	SourceName    string
+	SourceKind    SourceKind
+	Received      uint64
+	Bytes         uint64
 }
 
 type Source interface {
-	Packets() <-chan gopacket.Packet
-	Stats() (Stats, error)
+	Name() string
+	Kind() SourceKind
+	LinkType() layers.LinkType
+	Run(ctx context.Context, out chan<- RawPacket) error
+	CaptureStats() (CaptureStats, error)
 	Close() error
 }
