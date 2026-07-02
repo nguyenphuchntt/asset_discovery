@@ -1,0 +1,6 @@
+# docker-compose placeholder.
+#
+# This file will define local/demo services for:
+# - PCAP mode with mounted testdata and SQLite volume;
+# - live mode with network_mode: host and NET_RAW/NET_ADMIN capabilities;
+# - API/dashboard port exposure when enabled.
