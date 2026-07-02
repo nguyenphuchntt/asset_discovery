@@ -1,11 +1,3 @@
-// observation.go defines the evidence contract produced by analyzers.
-//
-// Long-term responsibilities:
-//   - represent one passive observation from one packet/protocol;
-//   - carry source, timestamp, identifiers, observed attributes, confidence, and
-//     metadata;
-//   - avoid depending on decode package types in the domain model;
-//   - validate that observations have enough identity evidence before merge.
 package asset
 
 import (
@@ -18,60 +10,53 @@ type ObservationSource string
 
 const (
 	SourceEthernet ObservationSource = "ethernet"
-	SourceIP       ObservationSource = "ip"
-	SourceFlow     ObservationSource = "flow"
-	SourceARP      ObservationSource = "arp"
-	SourceDHCPv4   ObservationSource = "dhcpv4"
-	SourceDHCPv6   ObservationSource = "dhcpv6"
-	SourceNDP      ObservationSource = "ndp"
-	SourceMDNS     ObservationSource = "mdns"
-	SourceLLMNR    ObservationSource = "llmnr"
-	SourceNBNS     ObservationSource = "nbns"
-	SourceSSDP     ObservationSource = "ssdp"
-	SourceLLDP     ObservationSource = "lldp"
-	SourceCDP      ObservationSource = "cdp"
-	SourceUnknown  ObservationSource = "unknown"
+	SourceIP ObservationSource = "ip"
+	SourceARP ObservationSource = "arp"
+	SourceDHCPv4 ObservationSource = "dhcpv4"
+	SourceDHCPv6 ObservationSource = "dhcpv6"
+	
+	SourceUnknown ObservationSource = "unknown"
 )
 
 type Observation struct {
-	Source     ObservationSource
+	Source ObservationSource
 	ObservedAt time.Time
 
-	Subject IdentitySet
-	Attrs   AttributeSet
+	Subject IdentitySet // target object
+	Attrs AttributeSet
 
 	Evidence Evidence
-	Metadata map[string]string
 }
 
 type AttributeSet struct {
-	MACs      []string
-	IPv4s     []string
-	IPv6s     []string
+	MACs []net.HardwareAddr
+	IPv4s []net.IP
+	IPv6s []net.IP
+
 	Hostnames []string
-	FQDNs     []string
-	Vendors   []VendorHint
-	Services  []ServiceHint
+	FQDNs []string
+
+	Vendors []Vendor
+	Services []Service
 	Protocols []string
 }
 
-type VendorHint struct {
+type Vendor struct {
 	Source string
-	Value  string
+	Value string
 }
 
-type ServiceHint struct {
+type Service struct {
 	Protocol string
-	Port     uint16
-	Name     string
-	Version  string
+	Port uint16
+	Name string
+	Version string
 }
 
 type Evidence struct {
-	Confidence int
-	Direction  string
-	Interface  string
-	CaptureID  string
+	Interface string
+	Operation string
+	DHCPVendor string
 }
 
 func NormalizeMACAddr(mac net.HardwareAddr) string {
@@ -99,9 +84,6 @@ func (o Observation) Valid() bool {
 		return false
 	}
 	if o.ObservedAt.IsZero() {
-		return false
-	}
-	if o.Evidence.Confidence < 0 || o.Evidence.Confidence > 100 {
 		return false
 	}
 	if len(o.Subject.Identifiers) == 0 {

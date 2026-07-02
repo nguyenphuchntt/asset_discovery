@@ -1,21 +1,12 @@
-// main.go is the process entrypoint for the passive discovery service.
-//
-// Long-term responsibilities:
-//   - parse configuration and initialize logging;
-//   - choose PCAP mode or live capture mode;
-//   - wire pipeline.Runner with capture, decode, analyzers, asset manager,
-//     lifecycle, persistence, stats, and API;
-//   - handle process exit codes and user-facing startup errors.
-//
-// Current code is still an early PCAP decoder path and will be replaced by the
-// pipeline package once the runtime skeleton is implemented.
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 
+	"passivediscovery/internal/analyzer"
 	"passivediscovery/internal/capture"
 	"passivediscovery/internal/config"
 	"passivediscovery/internal/decode"
@@ -30,7 +21,7 @@ func main() {
 }
 
 func run(args []string) error {
-	cfg, err := config.Parse(args)
+	cfg, err := config.Parse(args, os.Getenv)
 	if errors.Is(err, config.ErrHelp) {
 		fmt.Print(config.Usage())
 		return nil
@@ -45,6 +36,10 @@ func run(args []string) error {
 		return err
 	}
 
+	if cfg.Mode == config.ModeLive {
+		return errors.New("live capture is not implemented in this baseline")
+	}
+
 	fileSource, err := capture.NewFileSource(cfg.PCAPPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Cannot open PCAP file!")
@@ -52,12 +47,28 @@ func run(args []string) error {
 	}
 	defer fileSource.Close()
 
+	rawPackets := make(chan capture.RawPacket, cfg.QueueSize)
+	sourceErr := make(chan error, 1)
+	go func() {
+		defer close(rawPackets)
+		sourceErr <- fileSource.Run(context.Background(), rawPackets)
+	}()
+
 	decoder := decode.NewDecoder()
-	for packet := range fileSource.Packets() {
-		decodedPacket, ok := decoder.Decode(packet)
-		if ok {
-			fmt.Print(decodedPacket, "\n")
+	registry := analyzer.DefaultMinimalRegistry()
+	for rawPacket := range rawPackets {
+		decodedPacket, ok := decoder.Decode(rawPacket.Packet)
+		if !ok {
+			continue
 		}
+
+		observations := registry.Analyze(decodedPacket)
+		for _, observation := range observations {
+			fmt.Printf("%+v\n", observation)
+		}
+	}
+	if err := <-sourceErr; err != nil {
+		return err
 	}
 
 	logger.Info("finished!")

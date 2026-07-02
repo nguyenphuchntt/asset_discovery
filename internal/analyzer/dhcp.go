@@ -1,16 +1,7 @@
-// dhcp.go analyzes DHCP traffic for asset metadata.
-//
-// Responsibilities:
-//   - extract client MAC, requested/assigned/client IP, hostname, vendor class,
-//     DHCP message type, and later client identifiers/fingerprints;
-//   - emit observations for asset.Manager;
-//   - tolerate missing/malformed DHCP options;
-//   - keep DHCPv6 disabled until DUID/NDP/MAC correlation policy is defined.
 package analyzer
 
 import (
 	"net"
-	"strconv"
 
 	"passivediscovery/internal/asset"
 	"passivediscovery/internal/decode"
@@ -23,13 +14,6 @@ func NewDHCPAnalyzer() *DHCPAnalyzer {
 }
 
 func (d *DHCPAnalyzer) Analyze(packet decode.DecodedPacket) []asset.Observation {
-	if packet.DHCPv6 != nil {
-		// TODO: Re-enable DHCPv6 after the asset identity model for DUID,
-		// NDP, and MAC correlation is finalized.
-		return nil
-	}
-
-	// dhcpv4
 	if packet.DHCPv4 == nil {
 		return nil
 	}
@@ -39,60 +23,47 @@ func (d *DHCPAnalyzer) Analyze(packet decode.DecodedPacket) []asset.Observation 
 		return nil
 	}
 
-	observation, ok := newDHCPv4Observation(packet, dhcp.ClientMAC, selectDHCPv4IP(dhcp))
-	if !ok {
-		return nil
-	}
+	observation := newDHCPv4Observation(packet, dhcp.ClientMAC, selectDHCPv4IP(dhcp))
 
 	return []asset.Observation{observation}
 }
 
-func newDHCPv4Observation(packet decode.DecodedPacket, mac net.HardwareAddr, ip net.IP) (asset.Observation, bool) {
-	if packet.DHCPv4 == nil || !isUsableMAC(mac) {
-		return asset.Observation{}, false
-	}
-
+func newDHCPv4Observation(packet decode.DecodedPacket, mac net.HardwareAddr, ip net.IP) asset.Observation {
 	dhcp := packet.DHCPv4
-	normalizedIP := asset.NormalizeIPv4Addr(ip)
+
 	attrs := asset.AttributeSet{
-		MACs:      appendIfNotEmpty(nil, asset.NormalizeMACAddr(mac)),
-		IPv4s:     appendIfNotEmpty(nil, normalizedIP),
+		MACs: appendMACIfUsable(nil, mac),
+		IPv4s: appendIPIfUsable(nil, ip),
 		Hostnames: appendIfNotEmpty(nil, dhcp.Hostname),
 	}
-	if dhcp.VendorClass != "" {
-		attrs.Vendors = append(attrs.Vendors, asset.VendorHint{
-			Source: "dhcp.vendor_class",
-			Value:  dhcp.VendorClass,
-		})
-	}
+
+	normalizedIP := asset.NormalizeIPv4Addr(ip)
 
 	return asset.Observation{
-		Source:     asset.SourceDHCPv4,
+		Source: asset.SourceDHCPv4,
 		ObservedAt: packet.ObservedAt,
 		Subject: asset.IdentitySet{
 			Identifiers: dhcpv4Identifiers(mac, normalizedIP),
 		},
 		Attrs: attrs,
 		Evidence: asset.Evidence{
-			Confidence: 90,
+			Operation: dhcpMessageTypeName(dhcp.DHCPMessageType),
+			DHCPVendor: dhcp.DHCPVendor,
 		},
-		Metadata: map[string]string{
-			"dhcp.message_type": strconv.FormatUint(uint64(dhcp.DHCPMessageType), 10),
-		},
-	}, true
+	}
 }
 
 func dhcpv4Identifiers(mac net.HardwareAddr, normalizedIP string) []asset.Identifier {
 	identifiers := make([]asset.Identifier, 0, 2)
 	if normalizedMAC := asset.NormalizeMACAddr(mac); normalizedMAC != "" {
 		identifiers = append(identifiers, asset.Identifier{
-			Type:  asset.IdentifierMAC,
+			Type: asset.IdentifierMAC,
 			Value: normalizedMAC,
 		})
 	}
 	if normalizedIP != "" {
 		identifiers = append(identifiers, asset.Identifier{
-			Type:  asset.IdentifierIPv4,
+			Type: asset.IdentifierIPv4,
 			Value: normalizedIP,
 		})
 	}

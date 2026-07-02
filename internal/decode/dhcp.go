@@ -19,12 +19,13 @@ func decodeDHCPv4(decodedPacket *DecodedPacket, packet gopacket.Packet) bool {
 		}
 
 		decodedPacket.DHCPv4 = &DHCPv4Info{
-			ClientMAC:       cloneHardwareAddr(dhcp.ClientHWAddr),
-			ClientIPv4:      cloneIPv4(dhcp.ClientIP),
-			AssignedIPv4:    cloneIPv4(dhcp.YourClientIP),
-			RequestedIPv4:   dhcpOptionIPv4(dhcp, layers.DHCPOptRequestIP),
-			Hostname:        dhcpOptionString(dhcp, layers.DHCPOptHostname),
+			ClientMAC: cloneHardwareAddr(dhcp.ClientHWAddr),
+			ClientIPv4: cloneIPv4(dhcp.ClientIP),
+			AssignedIPv4: cloneIPv4(dhcp.YourClientIP),
+			RequestedIPv4: dhcpOptionIPv4(dhcp, layers.DHCPOptRequestIP),
+			Hostname: dhcpOptionString(dhcp, layers.DHCPOptHostname),
 			DHCPMessageType: dhcpOptionUint16(dhcp, layers.DHCPOptMessageType),
+			DHCPVendor: dhcpOptionString(dhcp, layers.DHCPOptClassID),
 		}
 
 		return true
@@ -46,7 +47,7 @@ func decodeDHCPv6(decodedPacket *DecodedPacket, packet gopacket.Packet) bool {
 	return false
 }
 
-func dhcpOptionString(dhcp *layers.DHCPv4, optionType layers.DHCPOpt) string {
+func dhcpOptionString(dhcp *layers.DHCPv4, optionType layers.DHCPOpt) string { // to string
 	option, ok := findDHCPOption(dhcp, optionType)
 	if !ok || len(option.Data) == 0 {
 		return ""
@@ -62,7 +63,7 @@ func dhcpOptionIPv4(dhcp *layers.DHCPv4, optionType layers.DHCPOpt) net.IP {
 	return cloneIPv4(net.IP(option.Data[:4]))
 }
 
-func dhcpOptionUint16(dhcp *layers.DHCPv4, optionType layers.DHCPOpt) uint16 {
+func dhcpOptionUint16(dhcp *layers.DHCPv4, optionType layers.DHCPOpt) uint16 { // to Uint16
 	option, ok := findDHCPOption(dhcp, optionType)
 	if !ok || len(option.Data) == 0 {
 		return 0
