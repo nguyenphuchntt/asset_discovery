@@ -5,7 +5,7 @@ import (
 	"passivediscovery/internal/decode"
 )
 
-type Registry struct {
+type Registry struct { // Analyzer Registry
 	analyzers []Analyzer
 }
 
@@ -19,7 +19,7 @@ func NewRegistry(analyzers ...Analyzer) *Registry {
 	return &Registry{analyzers: copied}
 }
 
-func DefaultMinimalRegistry() *Registry {
+func DefaultRegistry() *Registry {
 	return NewRegistry(
 		NewARPAnalyzer(),
 		NewDHCPAnalyzer(),
@@ -31,9 +31,9 @@ func (r *Registry) Analyze(packet decode.DecodedPacket) []asset.Observation {
 		return nil
 	}
 
-	observations := make([]asset.Observation, 0, len(r.analyzers))
+	observations := make([]asset.Observation, 0, len(r.analyzers)) // default 
 	for _, analyzer := range r.analyzers {
-		observations = append(observations, analyzer.Analyze(packet)...)
+		observations = append(observations, analyzer.Analyze(packet)...) // unpacking operator
 	}
 	return observations
 }
