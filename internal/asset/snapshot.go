@@ -1,8 +1,45 @@
-// snapshot.go will define read-only views of assets for API, CLI output, and
-// persistence.
-//
-// Snapshot types should avoid exposing mutable internal maps/slices from
-// AssetManager. They should include enough data for list/detail responses:
-// identifiers, IP history, hostname, vendor hints, sources, first/last seen,
-// status, and recent events.
 package asset
+
+import (
+	"slices"
+	"time"
+)
+
+type AssetSnapshot struct {
+	ID AssetID
+
+	// attr
+	MACs      []string
+	IPv4s     []string
+	IPv6s     []string
+
+	Hostnames []string
+	FQDNs     []string
+
+	Vendors   []Vendor
+	Services  []Service
+	Sources   []ObservationSource
+
+	FirstSeen time.Time
+	LastSeen  time.Time
+	Status    Status
+}
+
+func (a *Asset) Snapshot() AssetSnapshot {
+	return AssetSnapshot{
+		ID: a.ID,
+
+		MACs:      slices.Clone(a.MACs),
+		IPv4s:     slices.Clone(a.IPv4s),
+		IPv6s:     slices.Clone(a.IPv6s),
+		Hostnames: slices.Clone(a.Hostnames),
+		FQDNs:     slices.Clone(a.FQDNs),
+		Vendors:   slices.Clone(a.Vendors),
+		Services:  slices.Clone(a.Services),
+		Sources:   slices.Clone(a.Sources),
+
+		FirstSeen: a.FirstSeen,
+		LastSeen:  a.LastSeen,
+		Status:    a.Status,
+	}
+}
