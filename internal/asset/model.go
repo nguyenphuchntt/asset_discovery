@@ -1,7 +1,30 @@
-// model.go will define the core Asset domain model.
-//
-// Asset state should represent merged passive evidence over time: identifiers,
-// IP history, hostnames, vendor hints, sources/protocols, first seen, last seen,
-// lifecycle status, and conflict markers. It should not store raw packets by
-// default.
 package asset
+
+import "time"
+
+type AssetID string
+
+type Status string
+
+const (
+	StatusOnline  Status = "online"
+	StatusOffline Status = "offline"
+)
+
+type Asset struct {
+	ID AssetID
+
+	MACs      []string
+	IPv4s     []string
+	IPv6s     []string
+	Hostnames []string
+	FQDNs     []string
+	Vendors   []Vendor
+	Services  []Service
+	Sources   []ObservationSource
+
+	FirstSeen  time.Time
+	LastSeen   time.Time
+	Status     Status
+	Confidence int
+}
