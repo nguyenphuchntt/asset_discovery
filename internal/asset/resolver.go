@@ -1,5 +1,6 @@
 package asset
 
+// for binding AssetID and Identifier Keys of Observation
 type IdentityResolver interface {
 	// Resolve returns the asset IDs currently bound to any identifier in the
 	// subject. An empty result means the subject is belong to a new asset
