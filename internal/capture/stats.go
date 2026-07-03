@@ -58,11 +58,3 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		Dropped:    s.dropped.Load(),
 	}
 }
-
-// AggregateStats is the sum across all sources managed by a Manager, plus a
-// per-source breakdown for diagnostics.
-type AggregateStats struct {
-	Total      StatsSnapshot
-	PerSource  map[string]StatsSnapshot
-	QueueDepth int // current backlog (best-effort; 0 if unknown)
-}
