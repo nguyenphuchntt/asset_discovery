@@ -1,4 +1,0 @@
-# .dockerignore placeholder.
-#
-# This file will exclude build artifacts, local databases, large PCAP captures,
-# editor files, and other non-runtime data from Docker build context.
