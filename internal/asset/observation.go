@@ -49,7 +49,7 @@ type Vendor struct {
 type Service struct {
 	Protocol string
 	Port uint16
-	Name string
+	Name string // https/ ssh/ tls
 	Version string
 }
 

@@ -1,6 +1,7 @@
 package asset
 
 import (
+	"net"
 	"slices"
 	"time"
 )
@@ -9,16 +10,16 @@ type AssetSnapshot struct {
 	ID AssetID
 
 	// attr
-	MACs      []string
-	IPv4s     []string
-	IPv6s     []string
+	MACs  []net.HardwareAddr
+	IPv4s []net.IP
+	IPv6s []net.IP
 
 	Hostnames []string
 	FQDNs     []string
 
-	Vendors   []Vendor
-	Services  []Service
-	Sources   []ObservationSource
+	Vendors  []Vendor
+	Services []Service
+	Sources  []ObservationSource
 
 	FirstSeen time.Time
 	LastSeen  time.Time
@@ -28,10 +29,11 @@ type AssetSnapshot struct {
 func (a *Asset) Snapshot() AssetSnapshot {
 	return AssetSnapshot{
 		ID: a.ID,
+		
+		MACs:  cloneMACs(a.MACs),
+		IPv4s: cloneIPs(a.IPv4s),
+		IPv6s: cloneIPs(a.IPv6s),
 
-		MACs:      slices.Clone(a.MACs),
-		IPv4s:     slices.Clone(a.IPv4s),
-		IPv6s:     slices.Clone(a.IPv6s),
 		Hostnames: slices.Clone(a.Hostnames),
 		FQDNs:     slices.Clone(a.FQDNs),
 		Vendors:   slices.Clone(a.Vendors),
