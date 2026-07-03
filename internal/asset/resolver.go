@@ -1,21 +1,31 @@
 package asset
 
-// for binding AssetID and Identifier Keys of Observation
+// IdentityResolver maps identifiers to AssetIDs. The Manager holds one and is
+// the only writer; readers go through Manager.Apply / Manager.Get, not the
+// resolver directly.
 type IdentityResolver interface {
-	// Resolve returns the asset IDs currently bound to any identifier in the
-	// subject. An empty result means the subject is belong to a new asset
-	Resolve(subject IdentitySet) []AssetID
+	// Resolve returns the asset IDs currently bound to any of the supplied
+	// identifiers. An empty result means "new asset"; multiple results mean
+	// "this observation bridges two previously-separate assets — merge them".
+	Resolve(ids []Identifier) []AssetID
 
-	// Bind every identifier in the subject to the given asset ID.
-	Bind(id AssetID, subject IdentitySet)
+	// Bind every identifier in the slice to the given asset. If a key was
+	// previously bound to a different asset, that binding is removed (the
+	// resolver follows a "steal, not duplicate" rule: each key belongs to
+	// exactly one asset).
+	Bind(id AssetID, ids []Identifier)
 
-
+	// Unbind removes every key currently bound to the given asset.
 	Unbind(id AssetID)
 }
 
+// IdentityIndex is the default in-memory implementation of IdentityResolver.
+//
+// Two maps are kept in sync: byKey answers "which asset owns this key?",
+// byID answers "which keys does this asset own?".
 type IdentityIndex struct {
-	byKey map[string]AssetID   // (identifier:assetID)
-	byID  map[AssetID][]string // (assetID:[identifier])
+	byKey map[string]AssetID
+	byID  map[AssetID][]string
 }
 
 func NewIdentityIndex() *IdentityIndex {
@@ -25,11 +35,10 @@ func NewIdentityIndex() *IdentityIndex {
 	}
 }
 
-// return asset hold the IdentitySet, empty means new asset
-func (x *IdentityIndex) Resolve(subject IdentitySet) []AssetID {
-	var ids []AssetID
+func (x *IdentityIndex) Resolve(ids []Identifier) []AssetID {
+	var out []AssetID
 	seen := make(map[AssetID]struct{})
-	for _, key := range subject.Keys() { // all identity keys
+	for _, key := range uniqueKeys(ids) {
 		id, ok := x.byKey[key]
 		if !ok {
 			continue
@@ -38,26 +47,24 @@ func (x *IdentityIndex) Resolve(subject IdentitySet) []AssetID {
 			continue
 		}
 		seen[id] = struct{}{}
-		ids = append(ids, id)
+		out = append(out, id)
 	}
-	return ids
+	return out
 }
 
-// Bind every identifier in the subject to AssetId.
-func (x *IdentityIndex) Bind(id AssetID, subject IdentitySet) {
-	for _, key := range subject.Keys() {
+func (x *IdentityIndex) Bind(id AssetID, ids []Identifier) {
+	for _, key := range uniqueKeys(ids) {
 		if prev, ok := x.byKey[key]; ok {
-			if prev == id { // prev asset == new asset
+			if prev == id {
 				continue
 			}
-			x.removeKeyFromID(prev, key) // else: rm key from prev asset
+			x.removeKeyFromID(prev, key)
 		}
 		x.byKey[key] = id
 		x.byID[id] = append(x.byID[id], key)
 	}
 }
 
-// Removes bindings between assetID and its keys
 func (x *IdentityIndex) Unbind(id AssetID) {
 	for _, key := range x.byID[id] {
 		if x.byKey[key] == id {
@@ -67,7 +74,8 @@ func (x *IdentityIndex) Unbind(id AssetID) {
 	delete(x.byID, id)
 }
 
-// remove a key from byID map
+// removeKeyFromID drops a single key from an asset's key list and prunes the
+// entry when the list becomes empty.
 func (x *IdentityIndex) removeKeyFromID(id AssetID, key string) {
 	keys := x.byID[id]
 	for i, k := range keys {

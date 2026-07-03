@@ -1,72 +1,72 @@
 package analyzer
- 
+
 import (
+	"bytes"
 	"net"
+	"time"
+
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/layers"
+
 	"passivediscovery/internal/asset"
-	"passivediscovery/internal/decode"
 )
- 
+
+// ARPAnalyzer turns ARP request/reply frames into asset.Observation values.
+// Both the sender (request) and the target (reply) are emitted when their
+// hardware address is usable — gratuitous ARP and zero-MAC packets are skipped.
 type ARPAnalyzer struct{}
- 
-func NewARPAnalyzer() *ARPAnalyzer {
-	return &ARPAnalyzer{}
-}
- 
-func (a *ARPAnalyzer) Analyze(packet decode.DecodedPacket) []asset.Observation {
-	if packet.ARP == nil {
+
+func NewARPAnalyzer() *ARPAnalyzer { return &ARPAnalyzer{} }
+
+func (a *ARPAnalyzer) Analyze(packet gopacket.Packet) []asset.Observation {
+	layer := packet.Layer(layers.LayerTypeARP)
+	if layer == nil {
 		return nil
 	}
- 
-	arp := packet.ARP
-	out := make([]asset.Observation, 0, 2) // sender/target
- 
-	if isUsableMAC(arp.SenderMAC) {
-		out = append(out, newARPObservation(packet, arp.SenderMAC, arp.SenderIPv4))
+	arp, ok := layer.(*layers.ARP)
+	if !ok {
+		return nil
 	}
- 
-	if isUsableMAC(arp.TargetMAC) {
-		out = append(out, newARPObservation(packet, arp.TargetMAC, arp.TargetIPv4))
+
+	srcMAC := net.HardwareAddr(arp.SourceHwAddress)
+	dstMAC := net.HardwareAddr(arp.DstHwAddress)
+	srcIP := net.IP(arp.SourceProtAddress)
+	dstIP := net.IP(arp.DstProtAddress)
+
+	observedAt := packet.Metadata().Timestamp
+	opName := arpOperationName(arp.Operation)
+
+	out := make([]asset.Observation, 0, 2)
+	if isUsableMAC(srcMAC) {
+		out = append(out, newARPObservation(observedAt, opName, srcMAC, srcIP))
 	}
- 
+	if isUsableMAC(dstMAC) && !bytes.Equal(srcMAC, dstMAC) {
+		out = append(out, newARPObservation(observedAt, opName, dstMAC, dstIP))
+	}
 	if len(out) == 0 {
 		return nil
 	}
- 
 	return out
 }
 
-func newARPObservation(packet decode.DecodedPacket, mac net.HardwareAddr, ip net.IP) asset.Observation {
-	arpOperation := arpOperationName(packet.ARP.Operation)
-
+func newARPObservation(observedAt time.Time, opName string, mac net.HardwareAddr, ip net.IP) asset.Observation {
 	return asset.Observation{
-		Source: asset.SourceARP,
-		ObservedAt: packet.ObservedAt,
-		Subject: asset.IdentitySet{
-			Identifiers: arpIdentifiers(mac, ip),
-		},
-		Attrs: asset.AttributeSet{
-			MACs: appendMACIfUsable(nil, mac),
-			IPv4s: appendIPIfUsable(nil, ip),
-		},
-		Evidence: asset.Evidence{
-			Operation: arpOperation,
+		Source:      asset.SourceARP,
+		ObservedAt:  observedAt,
+		Identifiers: arpIdentifiers(mac, ip),
+		Extra: map[string]any{
+			"operation": opName,
 		},
 	}
 }
 
 func arpIdentifiers(mac net.HardwareAddr, ip net.IP) []asset.Identifier {
-	identifiers := make([]asset.Identifier, 0, 2)
-	if normalizedMAC := asset.NormalizeMACAddr(mac); normalizedMAC != "" {
-		identifiers = append(identifiers, asset.Identifier{
-			Type: asset.IdentifierMAC,
-			Value: normalizedMAC,
-		})
+	ids := make([]asset.Identifier, 0, 2)
+	if v := asset.NormalizeMACAddr(mac); v != "" {
+		ids = append(ids, asset.Identifier{Type: asset.IdentifierMAC, Value: v})
 	}
-	if normalizedIPv4 := asset.NormalizeIPv4Addr(ip); normalizedIPv4 != "" {
-		identifiers = append(identifiers, asset.Identifier{
-			Type: asset.IdentifierIPv4,
-			Value: normalizedIPv4,
-		})
+	if v := asset.NormalizeIPv4Addr(ip); v != "" {
+		ids = append(ids, asset.Identifier{Type: asset.IdentifierIPv4, Value: v})
 	}
-	return identifiers
+	return ids
 }

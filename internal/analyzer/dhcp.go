@@ -3,85 +3,75 @@ package analyzer
 import (
 	"net"
 
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/layers"
+
 	"passivediscovery/internal/asset"
-	"passivediscovery/internal/decode"
+	"passivediscovery/internal/utils"
 )
 
+// DHCPAnalyzer lifts DHCPv4 exchanges into asset.Observation values.
+// Only packets whose client HW address is usable (non-zero 6-byte) are
+// emitted, since DHCPv4 transaction IDs alone are not enough to tie a
+// packet to a device.
 type DHCPAnalyzer struct{}
 
-func NewDHCPAnalyzer() *DHCPAnalyzer {
-	return &DHCPAnalyzer{}
-}
+func NewDHCPAnalyzer() *DHCPAnalyzer { return &DHCPAnalyzer{} }
 
-func (d *DHCPAnalyzer) Analyze(packet decode.DecodedPacket) []asset.Observation {
-	if packet.DHCPv4 == nil {
+func (d *DHCPAnalyzer) Analyze(packet gopacket.Packet) []asset.Observation {
+	layer := packet.Layer(layers.LayerTypeDHCPv4)
+	if layer == nil {
+		return nil
+	}
+	dhcp, ok := layer.(*layers.DHCPv4)
+	if !ok || !isUsableMAC(dhcp.ClientHWAddr) {
 		return nil
 	}
 
-	dhcp := packet.DHCPv4
-	if !isUsableMAC(dhcp.ClientMAC) {
-		return nil
-	}
+	observedAt := packet.Metadata().Timestamp
+	ip := selectDHCPv4IP(dhcp)
+	hostname := utils.DHCPv4Hostname(dhcp)
 
-	observation := newDHCPv4Observation(packet, dhcp.ClientMAC, selectDHCPv4IP(dhcp))
-
-	return []asset.Observation{observation}
-}
-
-func newDHCPv4Observation(packet decode.DecodedPacket, mac net.HardwareAddr, ip net.IP) asset.Observation {
-	dhcp := packet.DHCPv4
-
-	attrs := asset.AttributeSet{
-		MACs: appendMACIfUsable(nil, mac),
-		IPv4s: appendIPIfUsable(nil, ip),
-		Hostnames: appendIfNotEmpty(nil, dhcp.Hostname),
-	}
-
-	normalizedIP := asset.NormalizeIPv4Addr(ip)
-
-	return asset.Observation{
-		Source: asset.SourceDHCPv4,
-		ObservedAt: packet.ObservedAt,
-		Subject: asset.IdentitySet{
-			Identifiers: dhcpv4Identifiers(mac, normalizedIP),
-		},
-		Attrs: attrs,
-		Evidence: asset.Evidence{
-			Operation: dhcpMessageTypeName(dhcp.DHCPMessageType),
-			DHCPVendor: dhcp.DHCPVendor,
+	obs := asset.Observation{
+		Source:      asset.SourceDHCPv4,
+		ObservedAt:  observedAt,
+		Identifiers: dhcpv4Identifiers(dhcp.ClientHWAddr, ip),
+		Extra: map[string]any{
+			"dhcp_message_type": dhcpMessageTypeName(utils.DHCPv4MessageType(dhcp)),
+			"dhcp_vendor_class": utils.DHCPv4ClassID(dhcp),
 		},
 	}
+	if hostname != "" {
+		obs.Hostnames = []string{hostname}
+	}
+	return []asset.Observation{obs}
 }
 
-func dhcpv4Identifiers(mac net.HardwareAddr, normalizedIP string) []asset.Identifier {
-	identifiers := make([]asset.Identifier, 0, 2)
-	if normalizedMAC := asset.NormalizeMACAddr(mac); normalizedMAC != "" {
-		identifiers = append(identifiers, asset.Identifier{
-			Type: asset.IdentifierMAC,
-			Value: normalizedMAC,
-		})
+func dhcpv4Identifiers(mac net.HardwareAddr, ip net.IP) []asset.Identifier {
+	ids := make([]asset.Identifier, 0, 2)
+	if v := asset.NormalizeMACAddr(mac); v != "" {
+		ids = append(ids, asset.Identifier{Type: asset.IdentifierMAC, Value: v})
 	}
-	if normalizedIP != "" {
-		identifiers = append(identifiers, asset.Identifier{
-			Type: asset.IdentifierIPv4,
-			Value: normalizedIP,
-		})
+	if v := asset.NormalizeIPv4Addr(ip); v != "" {
+		ids = append(ids, asset.Identifier{Type: asset.IdentifierIPv4, Value: v})
 	}
-	return identifiers
+	return ids
 }
 
-func selectDHCPv4IP(dhcp *decode.DHCPv4Info) net.IP {
+// selectDHCPv4IP picks the most authoritative IP a DHCPv4 packet carries:
+// assigned (from OFFER/ACK) > requested (DISCOVER/REQUEST) > ciaddr (REQUEST).
+func selectDHCPv4IP(dhcp *layers.DHCPv4) net.IP {
 	if dhcp == nil {
 		return nil
 	}
-	if asset.NormalizeIPv4Addr(dhcp.AssignedIPv4) != "" {
-		return dhcp.AssignedIPv4
+	if asset.NormalizeIPv4Addr(dhcp.YourClientIP) != "" {
+		return dhcp.YourClientIP
 	}
-	if asset.NormalizeIPv4Addr(dhcp.RequestedIPv4) != "" {
-		return dhcp.RequestedIPv4
+	if req := utils.DHCPv4RequestedIP(dhcp); asset.NormalizeIPv4Addr(req) != "" {
+		return req
 	}
-	if asset.NormalizeIPv4Addr(dhcp.ClientIPv4) != "" {
-		return dhcp.ClientIPv4
+	if asset.NormalizeIPv4Addr(dhcp.ClientIP) != "" {
+		return dhcp.ClientIP
 	}
 	return nil
 }

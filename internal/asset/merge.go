@@ -6,37 +6,91 @@ import (
 	"time"
 )
 
-// update an Asset with a new Observation
-func mergeObservation(a *Asset, obs Observation) (changed bool) {
+// mergeObservation folds an Observation into an existing Asset.
+//
+// Returns true if anything in the asset changed (used by the manager to
+// decide whether to emit an EventAssetUpdated and to mark the asset dirty).
+//
+// Callers must hold whatever lock protects `a`.
+func mergeObservation(a *Asset, obs Observation) bool {
+	changed := false
 	var c bool
 
-	a.MACs, c = mergeMACs(a.MACs, obs.Attrs.MACs...)
-	changed = changed || c
-	a.IPv4s, c = mergeIPv4s(a.IPv4s, obs.Attrs.IPv4s...)
-	changed = changed || c
-	a.IPv6s, c = mergeIPv6s(a.IPv6s, obs.Attrs.IPv6s...)
-	changed = changed || c
+	// 1. Identifiers drive the canonical identifier slices.
+	for _, id := range obs.Identifiers {
+		switch id.Type {
+		case IdentifierMAC:
+			mac, err := net.ParseMAC(id.Value)
+			if err != nil {
+				continue
+			}
+			a.MACs, c = mergeMACs(a.MACs, mac)
+			changed = changed || c
 
-	a.Hostnames, c = mergeStrings(a.Hostnames, obs.Attrs.Hostnames...)
-	changed = changed || c
-	a.FQDNs, c = mergeStrings(a.FQDNs, obs.Attrs.FQDNs...)
-	changed = changed || c
+		case IdentifierIPv4:
+			ip := net.ParseIP(id.Value)
+			if ip == nil {
+				continue
+			}
+			v4 := ip.To4()
+			if v4 == nil {
+				continue
+			}
+			a.IPv4s, c = mergeIPv4s(a.IPv4s, v4)
+			changed = changed || c
 
-	a.Vendors, c = mergeVendors(a.Vendors, obs.Attrs.Vendors...)
-	changed = changed || c
-	a.Services, c = mergeServices(a.Services, obs.Attrs.Services...)
-	changed = changed || c
-	a.Sources, c = mergeSources(a.Sources, obs.Source)
-	changed = changed || c
+		case IdentifierIPv6:
+			ip := net.ParseIP(id.Value)
+			if ip == nil {
+				continue
+			}
+			if ip.To4() != nil {
+				continue // skip v4-mapped v6
+			}
+			v6 := ip.To16()
+			if v6 == nil {
+				continue
+			}
+			a.IPv6s, c = mergeIPv6s(a.IPv6s, v6)
+			changed = changed || c
+		}
+	}
 
+	// 2. Typed optional fields.
+	if len(obs.Hostnames) > 0 {
+		a.Hostnames, c = mergeStrings(a.Hostnames, obs.Hostnames...)
+		changed = changed || c
+	}
+	if len(obs.Services) > 0 {
+		a.Services, c = mergeServices(a.Services, obs.Services...)
+		changed = changed || c
+	}
+
+	// 3. Free-form extras.
+	if mergeExtras(&a.Extra, obs.Extra) {
+		changed = true
+	}
+
+	// 4. Timestamps.
 	if touchTimestamps(a, obs.ObservedAt) {
 		changed = true
 	}
+
 	return changed
 }
 
-// merge two assets
-func mergeAssets(primary, secondary *Asset) (changed bool) {
+// mergeAssets folds every typed field of `secondary` into `primary`. Called
+// when the resolver reports that one observation bridges two previously-
+// separate assets — they should converge on `primary` and `secondary` is
+// discarded.
+//
+// Semantics:
+//   - Identifier slices: dedup union.
+//   - Typed optional scalars (MACVendor, OS): first non-empty wins.
+//   - Extra: same first-wins / slice-append rules as mergeExtras.
+//   - FirstSeen/LastSeen: take the earliest/latest across both.
+func mergeAssets(primary, secondary *Asset) bool {
+	changed := false
 	var c bool
 
 	primary.MACs, c = mergeMACs(primary.MACs, secondary.MACs...)
@@ -45,16 +99,24 @@ func mergeAssets(primary, secondary *Asset) (changed bool) {
 	changed = changed || c
 	primary.IPv6s, c = mergeIPv6s(primary.IPv6s, secondary.IPv6s...)
 	changed = changed || c
+
 	primary.Hostnames, c = mergeStrings(primary.Hostnames, secondary.Hostnames...)
-	changed = changed || c
-	primary.FQDNs, c = mergeStrings(primary.FQDNs, secondary.FQDNs...)
-	changed = changed || c
-	primary.Vendors, c = mergeVendors(primary.Vendors, secondary.Vendors...)
 	changed = changed || c
 	primary.Services, c = mergeServices(primary.Services, secondary.Services...)
 	changed = changed || c
-	primary.Sources, c = mergeSources(primary.Sources, secondary.Sources...)
-	changed = changed || c
+
+	if mergeExtras(&primary.Extra, secondary.Extra) {
+		changed = true
+	}
+
+	if primary.MACVendor == "" && secondary.MACVendor != "" {
+		primary.MACVendor = secondary.MACVendor
+		changed = true
+	}
+	if primary.OS == "" && secondary.OS != "" {
+		primary.OS = secondary.OS
+		changed = true
+	}
 
 	if !secondary.FirstSeen.IsZero() && (primary.FirstSeen.IsZero() || secondary.FirstSeen.Before(primary.FirstSeen)) {
 		primary.FirstSeen = secondary.FirstSeen
@@ -67,11 +129,12 @@ func mergeAssets(primary, secondary *Asset) (changed bool) {
 	return changed
 }
 
-// update first_seen/ last_seen
-func touchTimestamps(a *Asset, at time.Time) (changed bool) {
+// touchTimestamps widens FirstSeen/LastSeen to include `at`.
+func touchTimestamps(a *Asset, at time.Time) bool {
 	if at.IsZero() {
 		return false
 	}
+	changed := false
 	if a.FirstSeen.IsZero() || at.Before(a.FirstSeen) {
 		a.FirstSeen = at
 		changed = true
@@ -83,12 +146,53 @@ func touchTimestamps(a *Asset, at time.Time) (changed bool) {
 	return changed
 }
 
-// merge MACs
-func mergeMACs(existing []net.HardwareAddr, incoming ...net.HardwareAddr) (result []net.HardwareAddr, changed bool) {
+// mergeExtras merges src into *dst using simple, predictable rules:
+//   - If a key is absent from dst, insert it.
+//   - If both sides are []any, append.
+//   - Otherwise, the existing value wins (so a later observation cannot
+//     overwrite a more authoritative earlier one — first non-empty wins
+//     in practice because nil/empty entries don't enter the loop).
+//
+// Returning a value of nil from a merge is intentionally a no-op; the field
+// is only "changed" when something is actually added.
+func mergeExtras(dst *map[string]any, src map[string]any) bool {
+	if len(src) == 0 {
+		return false
+	}
+	if *dst == nil {
+		*dst = make(map[string]any, len(src))
+	}
+	changed := false
+	for k, v := range src {
+		if v == nil {
+			continue
+		}
+		existing, ok := (*dst)[k]
+		if !ok {
+			(*dst)[k] = v
+			changed = true
+			continue
+		}
+		if eSlice, ok := existing.([]any); ok {
+			if nSlice, ok := v.([]any); ok {
+				(*dst)[k] = append(eSlice, nSlice...)
+				changed = true
+			}
+		}
+	}
+	return changed
+}
+
+// -----------------------------------------------------------------------------
+// Slice merge helpers (dedup with canonical keys, return changed flag)
+// -----------------------------------------------------------------------------
+
+func mergeMACs(existing []net.HardwareAddr, incoming ...net.HardwareAddr) ([]net.HardwareAddr, bool) {
 	seen := make(map[string]struct{}, len(existing)+len(incoming))
 	for _, m := range existing {
 		seen[NormalizeMACAddr(m)] = struct{}{}
 	}
+	changed := false
 	for _, m := range incoming {
 		k := NormalizeMACAddr(m)
 		if k == "" {
@@ -104,23 +208,20 @@ func mergeMACs(existing []net.HardwareAddr, incoming ...net.HardwareAddr) (resul
 	return existing, changed
 }
 
-// merge IPv4s
-func mergeIPv4s(existing []net.IP, incoming ...net.IP) (result []net.IP, changed bool) {
+func mergeIPv4s(existing []net.IP, incoming ...net.IP) ([]net.IP, bool) {
 	return mergeIPs(existing, incoming, NormalizeIPv4Addr, net.IP.To4)
 }
 
-// merge IPv6s
-func mergeIPv6s(existing []net.IP, incoming ...net.IP) (result []net.IP, changed bool) {
+func mergeIPv6s(existing []net.IP, incoming ...net.IP) ([]net.IP, bool) {
 	return mergeIPs(existing, incoming, NormalizeIPv6Addr, net.IP.To16)
 }
 
-// merge IPs
 func mergeIPs(existing []net.IP, incoming []net.IP, norm func(net.IP) string, canon func(net.IP) net.IP) ([]net.IP, bool) {
-	changed := false
 	seen := make(map[string]struct{}, len(existing)+len(incoming))
 	for _, ip := range existing {
 		seen[norm(ip)] = struct{}{}
 	}
+	changed := false
 	for _, ip := range incoming {
 		k := norm(ip)
 		if k == "" {
@@ -136,56 +237,14 @@ func mergeIPs(existing []net.IP, incoming []net.IP, norm func(net.IP) string, ca
 	return existing, changed
 }
 
-// clone HardwareAddr
-func cloneHardwareAddr(mac net.HardwareAddr) net.HardwareAddr {
-	if mac == nil {
-		return nil
-	}
-	out := make(net.HardwareAddr, len(mac))
-	copy(out, mac)
-	return out
-}
-
-// cloneIP
-func cloneIP(ip net.IP) net.IP {
-	if ip == nil {
-		return nil
-	}
-	out := make(net.IP, len(ip))
-	copy(out, ip)
-	return out
-}
-
-// cloneMACs
-func cloneMACs(src []net.HardwareAddr) []net.HardwareAddr {
-	if src == nil {
-		return nil
-	}
-	out := make([]net.HardwareAddr, len(src))
-	for i, m := range src {
-		out[i] = cloneHardwareAddr(m)
-	}
-	return out
-}
-
-// cloneIPs
-func cloneIPs(src []net.IP) []net.IP {
-	if src == nil {
-		return nil
-	}
-	out := make([]net.IP, len(src))
-	for i, ip := range src {
-		out[i] = cloneIP(ip)
-	}
-	return out
-}
-
-// merge string (deduplicate, order-preserving)
-func mergeStrings(existing []string, incoming ...string) (result []string, changed bool) {
+// mergeStrings is a dedup, order-preserving union of string slices. Empty
+// incoming values are skipped.
+func mergeStrings(existing []string, incoming ...string) ([]string, bool) {
 	seen := make(map[string]struct{}, len(existing)+len(incoming))
 	for _, v := range existing {
 		seen[v] = struct{}{}
 	}
+	changed := false
 	for _, v := range incoming {
 		if v == "" {
 			continue
@@ -200,35 +259,15 @@ func mergeStrings(existing []string, incoming ...string) (result []string, chang
 	return existing, changed
 }
 
-// merge vendor (deduplicate by (Source, Value))
-func mergeVendors(existing []Vendor, incoming ...Vendor) (result []Vendor, changed bool) {
-	key := func(v Vendor) string { return v.Source + "\x00" + v.Value } // null character
-	seen := make(map[string]struct{}, len(existing)+len(incoming))
-	for _, v := range existing {
-		seen[key(v)] = struct{}{}
-	}
-	for _, v := range incoming {
-		if v.Value == "" {
-			continue
-		}
-		k := key(v)
-		if _, ok := seen[k]; ok {
-			continue
-		}
-		seen[k] = struct{}{}
-		existing = append(existing, v)
-		changed = true
-	}
-	return existing, changed
-}
-
-// merge services (deduplicate by (protocol, port))
-func mergeServices(existing []Service, incoming ...Service) (result []Service, changed bool) {
+// mergeServices dedups by (Protocol, Port). Name and Version are kept from the
+// first observation that supplies them.
+func mergeServices(existing []Service, incoming ...Service) ([]Service, bool) {
 	key := func(s Service) string { return s.Protocol + ":" + strconv.Itoa(int(s.Port)) }
 	seen := make(map[string]struct{}, len(existing)+len(incoming))
 	for _, s := range existing {
 		seen[key(s)] = struct{}{}
 	}
+	changed := false
 	for _, s := range incoming {
 		if s.Protocol == "" && s.Port == 0 {
 			continue
@@ -244,22 +283,46 @@ func mergeServices(existing []Service, incoming ...Service) (result []Service, c
 	return existing, changed
 }
 
-// merge Observation source
-func mergeSources(existing []ObservationSource, incoming ...ObservationSource) (result []ObservationSource, changed bool) {
-	seen := make(map[ObservationSource]struct{}, len(existing)+len(incoming))
-	for _, s := range existing {
-		seen[s] = struct{}{}
+// -----------------------------------------------------------------------------
+// Clone helpers (used by snapshot)
+// -----------------------------------------------------------------------------
+
+func cloneHardwareAddr(mac net.HardwareAddr) net.HardwareAddr {
+	if mac == nil {
+		return nil
 	}
-	for _, s := range incoming {
-		if s == "" {
-			continue
-		}
-		if _, ok := seen[s]; ok {
-			continue
-		}
-		seen[s] = struct{}{}
-		existing = append(existing, s)
-		changed = true
+	out := make(net.HardwareAddr, len(mac))
+	copy(out, mac)
+	return out
+}
+
+func cloneIP(ip net.IP) net.IP {
+	if ip == nil {
+		return nil
 	}
-	return existing, changed
+	out := make(net.IP, len(ip))
+	copy(out, ip)
+	return out
+}
+
+func cloneMACs(src []net.HardwareAddr) []net.HardwareAddr {
+	if src == nil {
+		return nil
+	}
+	out := make([]net.HardwareAddr, len(src))
+	for i, m := range src {
+		out[i] = cloneHardwareAddr(m)
+	}
+	return out
+}
+
+func cloneIPs(src []net.IP) []net.IP {
+	if src == nil {
+		return nil
+	}
+	out := make([]net.IP, len(src))
+	for i, ip := range src {
+		out[i] = cloneIP(ip)
+	}
+	return out
 }
