@@ -10,6 +10,8 @@ const (
 	EventStatusOnline   EventType = "status_online"
 	EventStatusOffline  EventType = "status_offline"
 	EventIdentityMerged EventType = "identity_merged"
+	EventServiceSeen EventType = "service_seen"
+	EventAssetRemoved EventType = "asset_removed"
 )
 
 type Event struct {
