@@ -54,23 +54,6 @@ func mergeObservation(a *Asset, obs Observation) MergeResult {
 		a.OS = obs.OS
 		r.Changed = true
 	}
-	if a.OSVersion == "" && obs.OSVersion != "" {
-		a.OSVersion = obs.OSVersion
-		r.Changed = true
-	}
-	if a.Subnet == "" && obs.Subnet != "" {
-		a.Subnet = obs.Subnet
-		r.Changed = true
-	}
-
-	if obs.IsLocal && !a.IsLocal {
-		a.IsLocal = true
-		r.Changed = true
-	}
-	if obs.IsGateway && !a.IsGateway {
-		a.IsGateway = true
-		r.Changed = true
-	}
 
 	if mergeExtras(&a.Extra, obs.Extra) {
 		r.Changed = true

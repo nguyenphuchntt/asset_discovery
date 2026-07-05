@@ -19,11 +19,6 @@ type AssetSnapshot struct {
 	DeviceType string
 	Model      string
 	OS         string
-	OSVersion  string
-
-	IsLocal   bool
-	IsGateway bool
-	Subnet    string
 
 	Extra map[string]any
 
@@ -47,11 +42,6 @@ func (a *Asset) Snapshot() AssetSnapshot {
 		DeviceType: a.DeviceType,
 		Model:     a.Model,
 		OS:        a.OS,
-		OSVersion: a.OSVersion,
-
-		IsLocal:   a.IsLocal,
-		IsGateway: a.IsGateway,
-		Subnet:    a.Subnet,
 
 		Extra: cloneExtras(a.Extra),
 

@@ -43,11 +43,6 @@ type Observation struct {
 	DeviceType string
 	Model      string
 	OS         string
-	OSVersion  string
-
-	IsLocal   bool
-	IsGateway bool
-	Subnet    string
 
 	Extra map[string]any
 }

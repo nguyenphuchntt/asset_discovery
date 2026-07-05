@@ -18,11 +18,12 @@ const (
 )
 
 type Event struct {
-	Type    EventType
-	AssetID AssetID
-	At      time.Time
-	Source  ObservationSource
-	Detail  string
+	Type     EventType
+	AssetID  AssetID
+	At       time.Time
+	Source   ObservationSource
+	Detail   string
+	Metadata map[string]any
 }
 
 func newEvent(t EventType, id AssetID, at time.Time, source ObservationSource, detail string) Event {
