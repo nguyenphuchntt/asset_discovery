@@ -113,8 +113,11 @@ func applyServerScalars(obs *asset.Observation, server string) {
 		case "linux", "freebsd", "openbsd", "netbsd", "darwin":
 			if obs.OS == "" {
 				obs.OS = name
-				if ver != "" && obs.OSVersion == "" {
-					obs.OSVersion = ver
+				if ver != "" && obs.Extra["ssdp_os_version"] == nil {
+					if obs.Extra == nil {
+						obs.Extra = make(map[string]any)
+					}
+					obs.Extra["ssdp_os_version"] = ver
 				}
 			}
 		case "upnp": // no value UPnP/1.0
