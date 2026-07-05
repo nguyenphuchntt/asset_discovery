@@ -27,6 +27,11 @@ const (
 	DefaultBatchSize    = 500
 )
 
+const (
+	IpGrace = 5 * time.Minute
+)
+
+
 var ErrHelp = flag.ErrHelp
 
 type Config struct {
@@ -53,7 +58,7 @@ type Config struct {
 	DBPath        string
 	DBWAL         bool
 	DBBusyTimeout time.Duration
-	KeepJSONOutput bool // keep writing .assets.json/.events.json even if --db is set
+	KeepJSONOutput bool
 }
 
 func firstNonEmpty(value, fallback string) string {
@@ -180,7 +185,6 @@ func Parse(args []string, getenv func(string) string) (*Config, error) {
 	fs.BoolVar(&cfg.KeepJSONOutput, "keep-json-output", cfg.KeepJSONOutput, "keep writing JSON output files even when --db is set")
 
 	if err := fs.Parse(args); err != nil {
-		// Preserve ErrHelp so callers can print usage without treating it as a failure.
 		if errors.Is(err, flag.ErrHelp) {
 			return nil, ErrHelp
 		}
