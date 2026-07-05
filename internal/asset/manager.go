@@ -1,6 +1,8 @@
 package asset
 
 import (
+	"fmt"
+	"slices"
 	"sync"
 	"time"
 )
@@ -36,6 +38,7 @@ type Manager struct {
 	assets   map[AssetID]*Asset
 	resolver IdentityResolver
 	events   []Event
+	dirty    map[AssetID]struct{}
 
 	vendor VendorResolver
 }
@@ -55,6 +58,7 @@ func NewManager(resolver IdentityResolver, opts ...ManagerOption) *Manager {
 	m := &Manager{
 		assets:   make(map[AssetID]*Asset),
 		resolver: resolver,
+		dirty:    make(map[AssetID]struct{}),
 	}
 	for _, opt := range opts {
 		opt(m)
@@ -77,11 +81,16 @@ func (m *Manager) Apply(obs Observation) (ApplyResult, error) {
 
 	if existingID, ok := m.resolver.Resolve(obs.MAC); ok {
 		a := m.assets[existingID]
-		m.mergeInto(a, obs)
+		mr := m.mergeInto(a, obs)
 		m.resolver.Bind(a.ID, obs.MAC)
 		if a.Status == StatusOffline {
 			a.Status = StatusOnline
+			mr.Changed = true
 			emit(EventStatusOnline, a.ID, "asset back online")
+		}
+		m.emitFirstSeen(a.ID, obs, mr, emit)
+		if mr.Changed {
+			m.markDirty(a.ID)
 		}
 		res.AssetID = a.ID
 		res.Action = ActionUpdated
@@ -95,9 +104,11 @@ func (m *Manager) Apply(obs Observation) (ApplyResult, error) {
 			MAC:    CloneMAC(obs.MAC),
 			Status: StatusOnline,
 		}
-		m.mergeInto(a, obs)
+		mr := m.mergeInto(a, obs)
 		m.assets[id] = a
 		m.resolver.Bind(id, obs.MAC)
+		m.markDirty(id)
+		m.emitFirstSeen(id, obs, mr, emit)
 		res.AssetID = id
 		res.Action = ActionCreated
 		emit(EventAssetCreated, id, "asset created")
@@ -132,20 +143,26 @@ func (m *Manager) Sweep(now time.Time, offlineAfter time.Duration) []Event {
 
 	var events []Event
 	for _, a := range m.assets {
-		sweepIPMap(&a.IPv4s, now)
-		sweepIPMap(&a.IPv6s, now)
+		changed := sweepIPMap(&a.IPv4s, now)
+		changed = sweepIPMap(&a.IPv6s, now) || changed
 		if a.Status == StatusOnline && now.Sub(a.LastSeen) > offlineAfter {
 			a.Status = StatusOffline
+			changed = true
 			e := newEvent(EventStatusOffline, a.ID, now, "", "asset went offline")
 			m.events = append(m.events, e)
 			events = append(events, e)
+		}
+		if changed {
+			m.markDirty(a.ID)
 		}
 	}
 	return events
 }
 
 const ipGrace = 5 * time.Minute
-func sweepIPMap(m *map[string]IPEntry, now time.Time) {
+
+func sweepIPMap(m *map[string]IPEntry, now time.Time) bool {
+	changed := false
 	for ip, e := range *m {
 		if e.Lease == 0 || e.Lease <= 0 {
 			continue
@@ -153,12 +170,24 @@ func sweepIPMap(m *map[string]IPEntry, now time.Time) {
 		if now.Sub(e.LastSeen) > e.Lease+ipGrace && e.IsActive {
 			e.IsActive = false
 			(*m)[ip] = e
+			changed = true
 		}
 	}
+	return changed
 }
 
 func (m *Manager) DrainDirty() []AssetSnapshot {
-	panic("TODO: implement (Phase 2 — persist)")
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	out := make([]AssetSnapshot, 0, len(m.dirty))
+	for id := range m.dirty {
+		if a, ok := m.assets[id]; ok {
+			out = append(out, a.Snapshot())
+		}
+	}
+	clear(m.dirty)
+	return out
 }
 
 func (m *Manager) DrainEvents() []Event {
@@ -169,15 +198,88 @@ func (m *Manager) DrainEvents() []Event {
 	return out
 }
 
-func (m *Manager) mergeInto(a *Asset, obs Observation) {
-	mergeObservation(a, obs)
+func (m *Manager) LoadSnapshots(snapshots []AssetSnapshot) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	loaded := 0
+	for _, s := range snapshots {
+		if s.ID == "" || len(s.MAC) == 0 {
+			continue
+		}
+		a := assetFromSnapshot(s)
+		existing, ok := m.assets[a.ID]
+		if ok && !a.LastSeen.After(existing.LastSeen) {
+			continue
+		}
+		m.assets[a.ID] = a
+		m.resolver.Bind(a.ID, a.MAC)
+		loaded++
+	}
+	return loaded
+}
+
+func (m *Manager) markDirty(id AssetID) {
+	if id == "" {
+		return
+	}
+	m.dirty[id] = struct{}{}
+}
+
+func (m *Manager) mergeInto(a *Asset, obs Observation) MergeResult {
+	mr := mergeObservation(a, obs)
 
 	if m.vendor == nil || a.MACVendor != "" || len(a.MAC) == 0 {
-		return
+		return mr
 	}
 	name, ok := m.vendor.VendorForMAC(a.MAC.String())
 	if !ok || name == "" {
-		return
+		return mr
 	}
 	a.MACVendor = name
+	mr.Changed = true
+	return mr
+}
+
+// emitFirstSeen appends first-seen events to the manager's event queue
+// whenever a merge introduces a new IP address, hostname, or service for
+// the first time. These append-only events preserve identity history in the
+// event log even though the asset state table is overwrite-on-flush.
+func (m *Manager) emitFirstSeen(id AssetID, obs Observation, mr MergeResult, emit func(EventType, AssetID, string)) {
+	for _, ip := range mr.NewIPv4s {
+		emit(EventIPFirstSeen, id, "IPv4 first seen: "+ip)
+	}
+	for _, ip := range mr.NewIPv6s {
+		emit(EventIPFirstSeen, id, "IPv6 first seen: "+ip)
+	}
+	for _, h := range mr.NewHostnames {
+		emit(EventHostnameFirstSeen, id, "hostname first seen: "+h)
+	}
+	for _, s := range mr.NewServices {
+		emit(EventServiceFirstSeen, id, "service first seen: "+s.Protocol+" "+fmt.Sprintf("%d", s.Port))
+	}
+}
+
+func assetFromSnapshot(s AssetSnapshot) *Asset {
+	return &Asset{
+		ID:         s.ID,
+		MAC:        CloneMAC(s.MAC),
+		IPv4s:      cloneIPMap(s.IPv4s),
+		IPv6s:      cloneIPMap(s.IPv6s),
+		Hostnames:  slices.Clone(s.Hostnames),
+		Services:   slices.Clone(s.Services),
+		MACVendor:  s.MACVendor,
+		DeviceType: s.DeviceType,
+		Model:      s.Model,
+		OS:         s.OS,
+		OSVersion:  s.OSVersion,
+		IsLocal:    s.IsLocal,
+		IsGateway:  s.IsGateway,
+		Subnet:     s.Subnet,
+		Extra:      cloneExtras(s.Extra),
+		FirstSeen:  s.FirstSeen,
+		LastSeen:   s.LastSeen,
+		SeenCount:  s.SeenCount,
+		Status:     s.Status,
+	}
 }

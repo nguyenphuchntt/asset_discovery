@@ -15,7 +15,7 @@ const (
 )
 
 type Service struct {
-	Protocol string // tpc/ udp
+	Protocol string // tcp/ udp
 	Port     uint16
 	Name     string // http/ ssh/ ...
 	Version  string
@@ -24,6 +24,8 @@ type Service struct {
 	Banner   string // raw first response
 	IsActive bool   // true if host replied
 	LastSeen time.Time
+
+	IsClient bool
 }
 
 type IPEntry struct {

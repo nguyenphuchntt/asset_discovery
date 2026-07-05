@@ -1,73 +1,87 @@
 package asset
 
-func mergeObservation(a *Asset, obs Observation) bool {
-	changed := false
-	var c bool
+type MergeResult struct {
+	Changed      bool
+	NewIPv4s     []string
+	NewIPv6s     []string
+	NewHostnames []string
+	NewServices  []Service
+}
 
-	if mergeIPMap(&a.IPv4s, obs.IPv4s, obs.ObservedAt) {
-		changed = true
-	}
-	if mergeIPMap(&a.IPv6s, obs.IPv6s, obs.ObservedAt) {
-		changed = true
-	}
+func mergeObservation(a *Asset, obs Observation) MergeResult {
+	var r MergeResult
+
+	changed, added4 := mergeIPMap(&a.IPv4s, obs.IPv4s, obs.ObservedAt)
+	r.Changed = r.Changed || changed
+	r.NewIPv4s = added4
+
+	changed, added6 := mergeIPMap(&a.IPv6s, obs.IPv6s, obs.ObservedAt)
+	r.Changed = r.Changed || changed
+	r.NewIPv6s = added6
 
 	if len(obs.Hostnames) > 0 {
-		a.Hostnames, c = mergeStrings(a.Hostnames, obs.Hostnames...)
-		changed = changed || c
+		var c bool
+		var added []string
+		a.Hostnames, c, added = mergeStrings(a.Hostnames, obs.Hostnames...)
+		r.Changed = r.Changed || c
+		r.NewHostnames = added
 	}
 	if len(obs.Services) > 0 {
+		var c bool
+		var added []Service
 		prev := len(a.Services)
-		a.Services, c = mergeServices(a.Services, obs.Services...)
-		changed = changed || c
+		a.Services, c, added = mergeServices(a.Services, obs.Services...)
+		r.Changed = r.Changed || c
+		r.NewServices = added
 		if len(a.Services) > prev {
-			changed = true
+			r.Changed = true
 		}
 	}
 
 	if a.MACVendor == "" && obs.MACVendor != "" {
 		a.MACVendor = obs.MACVendor
-		changed = true
+		r.Changed = true
 	}
 	if a.DeviceType == "" && obs.DeviceType != "" {
 		a.DeviceType = obs.DeviceType
-		changed = true
+		r.Changed = true
 	}
 	if a.Model == "" && obs.Model != "" {
 		a.Model = obs.Model
-		changed = true
+		r.Changed = true
 	}
 	if a.OS == "" && obs.OS != "" {
 		a.OS = obs.OS
-		changed = true
+		r.Changed = true
 	}
 	if a.OSVersion == "" && obs.OSVersion != "" {
 		a.OSVersion = obs.OSVersion
-		changed = true
+		r.Changed = true
 	}
 	if a.Subnet == "" && obs.Subnet != "" {
 		a.Subnet = obs.Subnet
-		changed = true
+		r.Changed = true
 	}
 
 	if obs.IsLocal && !a.IsLocal {
 		a.IsLocal = true
-		changed = true
+		r.Changed = true
 	}
 	if obs.IsGateway && !a.IsGateway {
 		a.IsGateway = true
-		changed = true
+		r.Changed = true
 	}
 
 	if mergeExtras(&a.Extra, obs.Extra) {
-		changed = true
+		r.Changed = true
 	}
 
 	if touchTimestamps(a, obs.ObservedAt) {
-		changed = true
+		r.Changed = true
 	}
 	a.SeenCount++
-	if !changed {
-		changed = a.SeenCount == 1
+	if !r.Changed {
+		r.Changed = a.SeenCount == 1
 	}
-	return changed
+	return r
 }

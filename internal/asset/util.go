@@ -53,14 +53,13 @@ func cloneIPMap(src map[string]IPEntry) map[string]IPEntry {
 	return out
 }
 
-func mergeIPMap(dst *map[string]IPEntry, src map[string]IPEntry, now time.Time) bool {
+func mergeIPMap(dst *map[string]IPEntry, src map[string]IPEntry, now time.Time) (changed bool, added []string) {
 	if len(src) == 0 {
-		return false
+		return false, nil
 	}
 	if *dst == nil {
 		*dst = make(map[string]IPEntry, len(src))
 	}
-	changed := false
 	for ip, in := range src {
 		if ip == "" {
 			continue
@@ -71,6 +70,7 @@ func mergeIPMap(dst *map[string]IPEntry, src map[string]IPEntry, now time.Time) 
 			in.IsActive = true
 			(*dst)[ip] = in
 			changed = true
+			added = append(added, ip)
 			continue
 		}
 		if in.LastSeen.After(existing.LastSeen) {
@@ -87,7 +87,7 @@ func mergeIPMap(dst *map[string]IPEntry, src map[string]IPEntry, now time.Time) 
 		}
 		(*dst)[ip] = existing
 	}
-	return changed
+	return changed, added
 }
 
 func touchTimestamps(a *Asset, at time.Time) bool {
@@ -145,7 +145,7 @@ func mergeExtras(dst *map[string]any, src map[string]any) bool {
 			}
 		case []string:
 			if nv, ok := v.([]string); ok {
-				merged, c := mergeStrings(ev, nv...)
+				merged, c, _ := mergeStrings(ev, nv...)
 				if c {
 					(*dst)[k] = merged
 					changed = true
@@ -166,12 +166,12 @@ func mergeExtras(dst *map[string]any, src map[string]any) bool {
 	return changed
 }
 
-func mergeStrings(existing []string, incoming ...string) ([]string, bool) {
+func mergeStrings(existing []string, incoming ...string) (out []string, changed bool, added []string) {
 	seen := make(map[string]struct{}, len(existing)+len(incoming))
 	for _, v := range existing {
 		seen[v] = struct{}{}
 	}
-	changed := false
+	out = existing
 	for _, v := range incoming {
 		if v == "" {
 			continue
@@ -180,19 +180,25 @@ func mergeStrings(existing []string, incoming ...string) ([]string, bool) {
 			continue
 		}
 		seen[v] = struct{}{}
-		existing = append(existing, v)
+		out = append(out, v)
+		added = append(added, v)
 		changed = true
 	}
-	return existing, changed
+	return out, changed, added
 }
 
-func mergeServices(existing []Service, incoming ...Service) ([]Service, bool) {
-	key := func(s Service) string { return s.Protocol + ":" + strconv.Itoa(int(s.Port)) }
+func mergeServices(existing []Service, incoming ...Service) (out []Service, changed bool, added []Service) {
+	key := func(s Service) string {
+		if s.IsClient {
+			return s.Protocol + ":" + strconv.Itoa(int(s.Port)) + ":client"
+		}
+		return s.Protocol + ":" + strconv.Itoa(int(s.Port)) + ":server"
+	}
 	seen := make(map[string]struct{}, len(existing)+len(incoming))
 	for _, s := range existing {
 		seen[key(s)] = struct{}{}
 	}
-	changed := false
+	out = existing
 	for _, s := range incoming {
 		if s.Protocol == "" && s.Port == 0 {
 			continue
@@ -202,8 +208,9 @@ func mergeServices(existing []Service, incoming ...Service) ([]Service, bool) {
 			continue
 		}
 		seen[k] = struct{}{}
-		existing = append(existing, s)
+		out = append(out, s)
+		added = append(added, s)
 		changed = true
 	}
-	return existing, changed
+	return out, changed, added
 }
