@@ -11,12 +11,9 @@ import (
 	"passivediscovery/internal/asset"
 )
 
-// ARPAnalyzer turns ARP request/reply frames into asset.Observation values.
-// Both the sender (request) and the target (reply) are emitted when their
-// hardware address is usable — gratuitous ARP and zero-MAC packets are skipped.
 type ARPAnalyzer struct{}
 
-func NewARPAnalyzer() *ARPAnalyzer { return &ARPAnalyzer{} }
+func NewARPAnalyzer() *ARPAnalyzer { return &ARPAnalyzer {} }
 
 func (a *ARPAnalyzer) Analyze(packet gopacket.Packet) []asset.Observation {
 	layer := packet.Layer(layers.LayerTypeARP)
@@ -34,13 +31,16 @@ func (a *ARPAnalyzer) Analyze(packet gopacket.Packet) []asset.Observation {
 	dstIP := net.IP(arp.DstProtAddress)
 
 	observedAt := packet.Metadata().Timestamp
-	opName := arpOperationName(arp.Operation)
+	opName := arpOperationName(arp)
 
 	out := make([]asset.Observation, 0, 2)
 	if isUsableMAC(srcMAC) {
 		out = append(out, newARPObservation(observedAt, opName, srcMAC, srcIP))
 	}
-	if isUsableMAC(dstMAC) && !bytes.Equal(srcMAC, dstMAC) {
+	if arp.Operation == layers.ARPReply &&
+		isUsableMAC(dstMAC) &&
+		!isBroadcastMAC(dstMAC) &&
+		!bytes.Equal(srcMAC, dstMAC) {
 		out = append(out, newARPObservation(observedAt, opName, dstMAC, dstIP))
 	}
 	if len(out) == 0 {
@@ -50,23 +50,17 @@ func (a *ARPAnalyzer) Analyze(packet gopacket.Packet) []asset.Observation {
 }
 
 func newARPObservation(observedAt time.Time, opName string, mac net.HardwareAddr, ip net.IP) asset.Observation {
-	return asset.Observation{
-		Source:      asset.SourceARP,
-		ObservedAt:  observedAt,
-		Identifiers: arpIdentifiers(mac, ip),
+	obs := asset.Observation{
+		Source:     asset.SourceARP,
+		ObservedAt: observedAt,
+		MAC:        asset.CloneMAC(mac),
 		Extra: map[string]any{
-			"operation": opName,
+			"arp_operation":      opName,
+			"arp_mac_randomized": isLocallyAdministeredMAC(mac),
 		},
 	}
-}
-
-func arpIdentifiers(mac net.HardwareAddr, ip net.IP) []asset.Identifier {
-	ids := make([]asset.Identifier, 0, 2)
-	if v := asset.NormalizeMACAddr(mac); v != "" {
-		ids = append(ids, asset.Identifier{Type: asset.IdentifierMAC, Value: v})
+	if ip4 := asset.NormalizeIPv4Addr(ip); ip4 != "" {
+		obs.IPv4s = map[string]asset.IPEntry{ip4: {FirstSeen: observedAt, LastSeen: observedAt, IsActive: true}}
 	}
-	if v := asset.NormalizeIPv4Addr(ip); v != "" {
-		ids = append(ids, asset.Identifier{Type: asset.IdentifierIPv4, Value: v})
-	}
-	return ids
+	return obs
 }
