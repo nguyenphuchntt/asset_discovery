@@ -1,33 +1,71 @@
-// log.go owns logger construction for the service.
-//
-// Long-term responsibilities:
-// - configure slog level and output destination;
-// - keep logs structured enough for demo and troubleshooting;
-// - avoid mixing logging policy into packet processing packages;
-// - later support JSON/text mode if deployment needs it.
 package log
 
 import (
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"strings"
 )
 
-func NewLogger(level string) (*slog.Logger, error) {
-	level = strings.ToLower(strings.TrimSpace(level))
+type Options struct {
+	Level  string // debug|info|warn|error
+	Format string // text|json
+	Output string // stdout|stderr|<path>
+}
 
+func NewLogger(opts Options) (*slog.Logger, io.Closer, error) {
+	level := strings.ToLower(strings.TrimSpace(opts.Level))
+	if level == "" {
+		level = "info"
+	}
 	slogLevel, err := parseLevel(level)
 	if err != nil {
-		return nil, err
+		return nil, nil, fmt.Errorf("log: %w", err)
 	}
 
-	handler := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slogLevel,
-	})
+	format := strings.ToLower(strings.TrimSpace(opts.Format))
+	if format == "" {
+		format = "text"
+	}
+	if format != "text" && format != "json" {
+		return nil, nil, fmt.Errorf("log: invalid format %q (text|json)", opts.Format)
+	}
 
-	return slog.New(handler), nil
+	out, closer, err := openOutput(opts.Output)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var handler slog.Handler
+	if format == "json" {
+		handler = slog.NewJSONHandler(out, &slog.HandlerOptions{Level: slogLevel})
+	} else {
+		handler = slog.NewTextHandler(out, &slog.HandlerOptions{Level: slogLevel})
+	}
+
+	logger := slog.New(handler).With(slog.String("service", "passivediscovery"))
+	return logger, closer, nil
 }
+
+func openOutput(output string) (io.Writer, io.Closer, error) {
+	switch strings.ToLower(strings.TrimSpace(output)) {
+	case "", "stdout":
+		return os.Stdout, noopCloser{}, nil
+	case "stderr":
+		return os.Stderr, noopCloser{}, nil
+	default:
+		f, err := os.OpenFile(output, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			return nil, nil, fmt.Errorf("log: open output %q: %w", output, err)
+		}
+		return f, f, nil
+	}
+}
+
+type noopCloser struct{}
+
+func (noopCloser) Close() error { return nil }
 
 func parseLevel(level string) (slog.Level, error) {
 	switch level {
