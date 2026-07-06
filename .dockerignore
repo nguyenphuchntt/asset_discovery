@@ -40,9 +40,8 @@ coverage.*
 *.so
 *.dylib
 
-# Docs & UI
+# Docs
 docs/
-ui/
 
 # Go workspace
 go.work

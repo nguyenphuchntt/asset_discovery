@@ -32,6 +32,6 @@ used queries
 
 .env
 
-.env.*
-
 /docs
+
+/output

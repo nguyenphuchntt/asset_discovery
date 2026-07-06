@@ -25,7 +25,7 @@ const (
 	DefaultLogPath        = "./output/discovery.log"
 	DefaultOfflineAfter   = 5 * time.Minute
 	DefaultQueueSize      = 4096
-	DefaultWorkers        = 1
+	DefaultWorkers        = 2
 	DefaultFlushEvery     = 5 * time.Second
 	DefaultBatchSize      = 500
 	DefaultLoadLimit      = 1000

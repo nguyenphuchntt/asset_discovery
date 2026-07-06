@@ -1,0 +1,57 @@
+# docker-compose.yml — live capture mode
+#
+# Usage:
+#   docker compose up -d
+#   docker compose logs -f
+#   docker compose down
+
+services:
+  discovery:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${VERSION:-dev}
+        BUILD_TIME: ${BUILD_TIME:-}
+    image: passivediscovery:${VERSION:-latest}
+    container_name: passivediscovery
+
+    restart: unless-stopped
+
+    # Capture from host network interface
+    network_mode: host
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+
+    volumes:
+      - discovery-output:/data/output
+      - discovery-db:/data/db
+
+    command: >
+      --interface ${DISCOVERY_IFACE:-eth0}
+      --output /data/output
+      --db /data/db/discovery.db
+      --oui /opt/passivediscovery/oui.csv
+      --offline-after ${DISCOVERY_OFFLINE_AFTER:-15m}
+      --log-level ${DISCOVERY_LOG_LEVEL:-info}
+      --log-output stdout
+      --api-addr ${DISCOVERY_API_ADDR:-:8080}
+      --ui
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/api/stats >/dev/null 2>&1 || /opt/passivediscovery/discovery --help >/dev/null 2>&1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  discovery-output:
+  discovery-db:
