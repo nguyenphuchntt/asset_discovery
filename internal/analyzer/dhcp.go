@@ -16,15 +16,16 @@ type DHCPAnalyzer struct{}
 func NewDHCPAnalyzer() *DHCPAnalyzer { return &DHCPAnalyzer{} }
 
 func (d *DHCPAnalyzer) Analyze(packet gopacket.Packet) []asset.Observation {
-	layer := packet.Layer(layers.LayerTypeDHCPv4)
-	if layer == nil {
+	ctx := DecodePacketCtx(packet)
+	return d.AnalyzeCtx(&ctx)
+}
+
+func (d *DHCPAnalyzer) AnalyzeCtx(ctx *PacketCtx) []asset.Observation {
+	if ctx == nil || ctx.DHCPv4 == nil || !isUsableMAC(ctx.DHCPv4.ClientHWAddr) {
 		return nil
 	}
-	dhcp, ok := layer.(*layers.DHCPv4)
-	if !ok || !isUsableMAC(dhcp.ClientHWAddr) {
-		return nil
-	}
-	observedAt := packet.Metadata().Timestamp
+	dhcp := ctx.DHCPv4
+	observedAt := ctx.ObservedAt()
 	ip := selectDHCPv4IP(dhcp)
 	hostname := utils.DHCPv4Hostname(dhcp)
 

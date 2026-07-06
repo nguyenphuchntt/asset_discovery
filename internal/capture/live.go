@@ -116,6 +116,8 @@ func (s *LiveSource) Run(ctx context.Context, out chan<- RawPacket) error {
 	defer s.markRunDone()
 
 	packetSource := gopacket.NewPacketSource(s.handle, s.handle.LinkType())
+	packetSource.DecodeOptions.Lazy = true
+	packetSource.DecodeOptions.NoCopy = true
 	return pump(ctx, packetSource.Packets(), s.closed, out,
 		SourceRef{Kind: s.Kind(), Name: s.Name()},
 		s.stats)

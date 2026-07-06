@@ -2,15 +2,14 @@ package storage
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"time"
 
+	"github.com/google/uuid"
 	_ "modernc.org/sqlite"
 
 	"passivediscovery/internal/asset"
@@ -45,8 +44,8 @@ func OpenSQLite(opts SQLiteOptions) (*SQLiteRepo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("storage: open sqlite %q: %w", opts.Path, err)
 	}
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
+	db.SetMaxOpenConns(2)
+	db.SetMaxIdleConns(2)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -245,34 +244,34 @@ func upsertAsset(ctx context.Context, tx *sql.Tx, s asset.AssetSnapshot) error {
 
 func replaceChildRows(ctx context.Context, tx *sql.Tx, s asset.AssetSnapshot) error {
 	id := string(s.ID)
-
-	for _, tbl := range []string{"asset_ips", "asset_hostnames", "asset_services"} {
-		if _, err := tx.ExecContext(ctx, "DELETE FROM "+tbl+" WHERE asset_id = ?", id); err != nil {
-			return fmt.Errorf("storage: delete %s for %s: %w", tbl, id, err)
-		}
-	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+
 	for ip, e := range s.IPv4s {
-		if err := insertIPRow(ctx, tx, id, ip, 4, e, now); err != nil {
+		if err := upsertIPRow(ctx, tx, id, ip, 4, e, now); err != nil {
 			return err
 		}
 	}
 	for ip, e := range s.IPv6s {
-		if err := insertIPRow(ctx, tx, id, ip, 6, e, now); err != nil {
+		if err := upsertIPRow(ctx, tx, id, ip, 6, e, now); err != nil {
 			return err
 		}
 	}
+
 	for _, h := range s.Hostnames {
 		if h == "" {
 			continue
 		}
 		const q = `INSERT INTO asset_hostnames(asset_id, hostname, first_seen, last_seen, updated_at)
-			VALUES (?, ?, ?, ?, ?)`
-		_, err := tx.ExecContext(ctx, q, id, h, timeFmt(s.FirstSeen), timeFmt(s.LastSeen), now)
-		if err != nil {
-			return fmt.Errorf("storage: insert hostname %s/%s: %w", id, h, err)
+			VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT(asset_id, hostname) DO UPDATE SET
+				last_seen = excluded.last_seen,
+				updated_at = excluded.updated_at`
+		if _, err := tx.ExecContext(ctx, q, id, h, timeFmt(s.FirstSeen), timeFmt(s.LastSeen), now); err != nil {
+			return fmt.Errorf("storage: upsert hostname %s/%s: %w", id, h, err)
 		}
 	}
+
+	// asset_services — UPSERT theo (asset_id, protocol, port).
 	for _, svc := range s.Services {
 		if svc.Protocol == "" && svc.Port == 0 {
 			continue
@@ -284,13 +283,43 @@ func replaceChildRows(ctx context.Context, tx *sql.Tx, s asset.AssetSnapshot) er
 		const q = `INSERT INTO asset_services
 			(asset_id, protocol, port, name, version, product, vendor, banner,
 			 is_active, last_seen, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-		_, err := tx.ExecContext(ctx, q, id, svc.Protocol, svc.Port,
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(asset_id, protocol, port) DO UPDATE SET
+				name = excluded.name,
+				version = excluded.version,
+				product = excluded.product,
+				vendor = excluded.vendor,
+				banner = excluded.banner,
+				is_active = excluded.is_active,
+				last_seen = excluded.last_seen,
+				updated_at = excluded.updated_at`
+		if _, err := tx.ExecContext(ctx, q, id, svc.Protocol, svc.Port,
 			svc.Name, svc.Version, svc.Product, svc.Vendor, svc.Banner,
-			boolInt(svc.IsActive), lastSeen, now)
-		if err != nil {
-			return fmt.Errorf("storage: insert service %s/%s:%d: %w", id, svc.Protocol, svc.Port, err)
+			boolInt(svc.IsActive), lastSeen, now); err != nil {
+			return fmt.Errorf("storage: upsert service %s/%s:%d: %w", id, svc.Protocol, svc.Port, err)
 		}
+	}
+	return nil
+}
+
+func upsertIPRow(ctx context.Context, tx *sql.Tx, assetID, ip string, ver int, e asset.IPEntry, now string) error {
+	const q = `INSERT INTO asset_ips
+		(asset_id, ip, version, first_seen, last_seen, lease_seconds, is_active, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(asset_id, ip) DO UPDATE SET
+			version = excluded.version,
+			last_seen = MAX(asset_ips.last_seen, excluded.last_seen),
+			first_seen = MIN(asset_ips.first_seen, excluded.first_seen),
+			lease_seconds = MAX(asset_ips.lease_seconds, excluded.lease_seconds),
+			is_active = excluded.is_active,
+			updated_at = excluded.updated_at`
+	_, err := tx.ExecContext(ctx, q,
+		assetID, ip, ver,
+		timeFmt(e.FirstSeen), timeFmt(e.LastSeen),
+		int64(e.Lease.Seconds()), boolInt(e.IsActive), now,
+	)
+	if err != nil {
+		return fmt.Errorf("storage: upsert IP %s/%s: %w", assetID, ip, err)
 	}
 	return nil
 }
@@ -311,8 +340,8 @@ func insertIPRow(ctx context.Context, tx *sql.Tx, assetID, ip string, ver int, e
 }
 
 func insertEvent(ctx context.Context, tx *sql.Tx, ev asset.Event, runID string) error {
-	evID := deterministicEventID(ev, runID)
-	const q = `INSERT OR IGNORE INTO asset_events
+	evID := generateEventID()
+	const q = `INSERT INTO asset_events
 		(id, run_id, asset_id, type, at, source, detail, inserted_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 	_, err := tx.ExecContext(ctx, q,
@@ -328,19 +357,8 @@ func insertEvent(ctx context.Context, tx *sql.Tx, ev asset.Event, runID string) 
 
 
 // generate eventID by using sha256 encoding to encode event
-func deterministicEventID(ev asset.Event, runID string) string {
-	h := sha256.New()
-	h.Write([]byte(string(ev.AssetID)))
-	h.Write([]byte(ev.Type))
-	h.Write([]byte(runID))
-	h.Write([]byte(timeFmt(ev.At)))
-	h.Write([]byte(ev.Source))
-	h.Write([]byte(ev.Detail))
-	sum := hex.EncodeToString(h.Sum(nil))
-	if len(sum) > 16 {
-		sum = sum[:16]
-	}
-	return fmt.Sprintf("evt:%s:%s:%s:%s", ev.AssetID, ev.Type, runID, sum)
+func generateEventID() string {
+	return uuid.New().String()
 }
 
 // loaders 

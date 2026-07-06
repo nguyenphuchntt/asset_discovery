@@ -2,6 +2,7 @@ package asset
 
 import (
 	"fmt"
+	"net"
 	"slices"
 	"sync"
 	"time"
@@ -35,38 +36,96 @@ type ApplyResult struct {
 	Action  ApplyAction
 }
 
-type Manager struct { // implement persister source
-	mu       sync.RWMutex // Sweep, Apply
-	assets   map[AssetID]*Asset
-	resolver IdentityResolver
-	events   []Event
-	dirty    map[AssetID]struct{}
+const ShardCount = 16
 
-	vendor VendorResolver
+type shard struct {
+	mu     sync.RWMutex
+	assets map[AssetID]*Asset
+	events []Event
+	dirty  map[AssetID]struct{}
 }
 
-func WithVendorResolver(v VendorResolver) ManagerOption {
-	return func(m *Manager) { m.vendor = v }
+type Manager struct {
+	shards   [ShardCount]*shard
+	resolver *ShardedResolver
+	vendor   VendorResolver
+}
+
+type ShardedResolver struct {
+	shards [ShardCount]struct {
+		sync.RWMutex
+		byKey map[string]AssetID
+		byID  map[AssetID]string
+	}
+}
+
+func NewShardedResolver() *ShardedResolver {
+	r := &ShardedResolver{}
+	for i := range r.shards {
+		r.shards[i].byKey = make(map[string]AssetID)
+		r.shards[i].byID = make(map[AssetID]string)
+	}
+	return r
+}
+
+func shardIndex(mac net.HardwareAddr) int {
+	if len(mac) == 0 {
+		return 0
+	}
+	var sum int
+	for _, b := range mac {
+		sum += int(b)
+	}
+	return sum % ShardCount
+}
+
+func (r *ShardedResolver) Resolve(mac net.HardwareAddr) (AssetID, int, bool) {
+	idx := shardIndex(mac)
+	r.shards[idx].RLock()
+	defer r.shards[idx].RUnlock()
+	id, ok := r.shards[idx].byKey[macKey(mac)]
+	return id, idx, ok
+}
+
+func (r *ShardedResolver) Bind(id AssetID, mac net.HardwareAddr, idx int) {
+	if len(mac) == 0 {
+		return
+	}
+	if idx < 0 || idx >= ShardCount {
+		idx = shardIndex(mac)
+	}
+	r.shards[idx].Lock()
+	defer r.shards[idx].Unlock()
+	k := macKey(mac)
+	r.shards[idx].byKey[k] = id
+	r.shards[idx].byID[id] = k
 }
 
 var _ AssetManager = (*Manager)(nil)
 
 type ManagerOption func(*Manager)
 
-func NewManager(resolver IdentityResolver, opts ...ManagerOption) *Manager {
-	if resolver == nil {
-		resolver = NewIdentityIndex()
-	}
+func WithVendorResolver(v VendorResolver) ManagerOption {
+	return func(m *Manager) { m.vendor = v }
+}
+
+func NewManager(_ IdentityResolver, opts ...ManagerOption) *Manager {
 	m := &Manager{
-		assets:   make(map[AssetID]*Asset),
-		resolver: resolver,
-		dirty:    make(map[AssetID]struct{}),
+		resolver: NewShardedResolver(),
+	}
+	for i := range m.shards {
+		m.shards[i] = &shard{
+			assets: make(map[AssetID]*Asset),
+			dirty:  make(map[AssetID]struct{}),
+		}
 	}
 	for _, opt := range opts {
 		opt(m)
 	}
 	return m
 }
+
+func (m *Manager) shardForIdx(idx int) *shard { return m.shards[idx] }
 
 func (m *Manager) mergeInto(a *Asset, obs Observation) MergeResult {
 	mr := mergeObservation(a, obs)
@@ -88,26 +147,31 @@ func (m *Manager) Apply(obs Observation) (ApplyResult, error) {
 		return ApplyResult{}, nil
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	// Phase 1: Resolve identity (RLock trên 1 shard — không lock toàn manager)
+	existingID, idx, exists := m.resolver.Resolve(obs.MAC)
 
-	var res ApplyResult
+	// Phase 2: Lock shard, thực hiện merge + emit + dirty.
+	sh := m.shardForIdx(idx)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+
 	emit := func(t EventType, id AssetID, detail string) {
-		m.events = append(m.events, newEvent(t, id, obs.ObservedAt, obs.Source, ""))
+		sh.events = append(sh.events, newEvent(t, id, obs.ObservedAt, obs.Source, ""))
 	}
 
-	if existingID, ok := m.resolver.Resolve(obs.MAC); ok {
-		a := m.assets[existingID]
+	var res ApplyResult
+	if exists {
+		a := sh.assets[existingID]
 		mr := m.mergeInto(a, obs)
-		m.resolver.Bind(a.ID, obs.MAC)
+		m.resolver.Bind(a.ID, obs.MAC, idx)
 		if a.Status == StatusOffline {
 			a.Status = StatusOnline
 			mr.Changed = true
 			emit(EventStatusOnline, a.ID, "")
 		}
-		m.emitFirstSeen(a.ID, mr, emit)
 		if mr.Changed {
-			m.markDirty(a.ID)
+			m.emitFirstSeen(a.ID, mr, emit)
+			m.markDirty(sh, a.ID)
 		}
 		res.AssetID = a.ID
 		res.Action = ActionUpdated
@@ -122,9 +186,9 @@ func (m *Manager) Apply(obs Observation) (ApplyResult, error) {
 			Status: StatusOnline,
 		}
 		mr := m.mergeInto(a, obs)
-		m.assets[id] = a
-		m.resolver.Bind(id, obs.MAC)
-		m.markDirty(id)
+		sh.assets[id] = a
+		m.resolver.Bind(id, obs.MAC, idx)
+		m.markDirty(sh, id)
 		m.emitFirstSeen(id, mr, emit)
 		res.AssetID = id
 		res.Action = ActionCreated
@@ -134,52 +198,56 @@ func (m *Manager) Apply(obs Observation) (ApplyResult, error) {
 	return res, nil
 }
 
-// get a Asset snapshot via its Id 
 func (m *Manager) Get(id AssetID) (AssetSnapshot, bool) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	a, ok := m.assets[id]
-	if !ok {
-		return AssetSnapshot{}, false
+	// Tìm shard chứa id bằng cách thử từng shard (id có thể ở shard bất kỳ).
+	for _, sh := range m.shards {
+		sh.mu.RLock()
+		if a, ok := sh.assets[id]; ok {
+			snap := a.Snapshot()
+			sh.mu.RUnlock()
+			return snap, true
+		}
+		sh.mu.RUnlock()
 	}
-	return a.Snapshot(), true
+	return AssetSnapshot{}, false
 }
 
-// return all assets as snapshot 
 func (m *Manager) Snapshot() []AssetSnapshot {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	out := make([]AssetSnapshot, 0, len(m.assets))
-	for _, a := range m.assets {
-		out = append(out, a.Snapshot())
+	var out []AssetSnapshot
+	for _, sh := range m.shards {
+		sh.mu.RLock()
+		for _, a := range sh.assets {
+			out = append(out, a.Snapshot())
+		}
+		sh.mu.RUnlock()
 	}
 	return out
 }
 
-
 func (m *Manager) Sweep(now time.Time, offlineAfter time.Duration) []Event {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	var events []Event
-	for _, a := range m.assets {
-		changed := sweepIPMap(&a.IPv4s, now)
-		changed = sweepIPMap(&a.IPv6s, now) || changed
-		if a.Status == StatusOnline && now.Sub(a.LastSeen) > offlineAfter {
-			a.Status = StatusOffline
-			changed = true
-			e := newEvent(EventStatusOffline, a.ID, now, "", "asset went offline")
-			m.events = append(m.events, e)
-			events = append(events, e)
+	for _, sh := range m.shards {
+		sh.mu.Lock()
+		for _, a := range sh.assets {
+			changed := sweepIPMap(&a.IPv4s, now)
+			changed = sweepIPMap(&a.IPv6s, now) || changed
+			if a.Status == StatusOnline && now.Sub(a.LastSeen) > offlineAfter {
+				a.Status = StatusOffline
+				changed = true
+				e := newEvent(EventStatusOffline, a.ID, now, "", "asset went offline")
+				sh.events = append(sh.events, e)
+				events = append(events, e)
+			}
+			if changed {
+				m.markDirty(sh, a.ID)
+			}
 		}
-		if changed {
-			m.markDirty(a.ID)
-		}
+		sh.mu.Unlock()
 	}
 	return events
 }
 
-// track IP active
+// sweepIPMap giữ nguyên — chỉ thao tác trên 1 asset, không cần external lock.
 func sweepIPMap(m *map[string]IPEntry, now time.Time) bool {
 	changed := false
 	for ip, e := range *m {
@@ -196,53 +264,66 @@ func sweepIPMap(m *map[string]IPEntry, now time.Time) bool {
 }
 
 func (m *Manager) DrainDirty() []AssetSnapshot {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	out := make([]AssetSnapshot, 0, len(m.dirty))
-	for id := range m.dirty {
-		if a, ok := m.assets[id]; ok {
-			out = append(out, a.Snapshot())
+	var out []AssetSnapshot
+	for _, sh := range m.shards {
+		sh.mu.Lock()
+		for id := range sh.dirty {
+			if a, ok := sh.assets[id]; ok {
+				out = append(out, a.Snapshot())
+			}
 		}
+		clear(sh.dirty)
+		sh.mu.Unlock()
 	}
-	clear(m.dirty)
 	return out
 }
 
 func (m *Manager) DrainEvents() []Event {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	out := m.events
-	m.events = nil
+	var out []Event
+	for _, sh := range m.shards {
+		sh.mu.Lock()
+		out = append(out, sh.events...)
+		sh.events = nil
+		sh.mu.Unlock()
+	}
 	return out
 }
 
 func (m *Manager) LoadSnapshots(snapshots []AssetSnapshot) int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	loaded := 0
+	// Group by shard trước để lock mỗi shard 1 lần.
+	byShard := make(map[int][]AssetSnapshot, ShardCount)
 	for _, s := range snapshots {
 		if s.ID == "" || len(s.MAC) == 0 {
 			continue
 		}
-		a := assetFromSnapshot(s)
-		existing, ok := m.assets[a.ID]
-		if ok && !a.LastSeen.After(existing.LastSeen) {
-			continue
+		idx := shardIndex(s.MAC)
+		byShard[idx] = append(byShard[idx], s)
+	}
+
+	loaded := 0
+	for idx, snaps := range byShard {
+		sh := m.shards[idx]
+		sh.mu.Lock()
+		for _, s := range snaps {
+			a := assetFromSnapshot(s)
+			existing, ok := sh.assets[a.ID]
+			if ok && !a.LastSeen.After(existing.LastSeen) {
+				continue
+			}
+			sh.assets[a.ID] = a
+			m.resolver.Bind(a.ID, a.MAC, idx)
+			loaded++
 		}
-		m.assets[a.ID] = a
-		m.resolver.Bind(a.ID, a.MAC)
-		loaded++
+		sh.mu.Unlock()
 	}
 	return loaded
 }
 
-func (m *Manager) markDirty(id AssetID) {
+func (m *Manager) markDirty(sh *shard, id AssetID) {
 	if id == "" {
 		return
 	}
-	m.dirty[id] = struct{}{}
+	sh.dirty[id] = struct{}{}
 }
 
 func (m *Manager) emitFirstSeen(id AssetID, mr MergeResult, emit func(EventType, AssetID, string)) {

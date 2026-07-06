@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/google/gopacket"
-	"github.com/google/gopacket/layers"
 
 	"passivediscovery/internal/asset"
 )
@@ -23,19 +22,19 @@ type SSDPAnalyzer struct{}
 func NewSSDPAnalyzer() *SSDPAnalyzer { return &SSDPAnalyzer{} }
 
 func (s *SSDPAnalyzer) Analyze(packet gopacket.Packet) []asset.Observation {
-	udp, ok := packet.Layer(layers.LayerTypeUDP).(*layers.UDP)
-	if !ok || (udp.SrcPort != 1900 && udp.DstPort != 1900) {
+	ctx := DecodePacketCtx(packet)
+	return s.AnalyzeCtx(&ctx)
+}
+
+func (s *SSDPAnalyzer) AnalyzeCtx(ctx *PacketCtx) []asset.Observation {
+	if ctx == nil || ctx.UDP == nil || (ctx.UDP.SrcPort != 1900 && ctx.UDP.DstPort != 1900) {
 		return nil
 	}
-	payload := udp.Payload
-	// SSDP messages
-
-	//NOTIFY * HTTP/1.1
-	isSSDPLike := bytes.HasPrefix(payload, []byte("NOTIFY ")) || bytes.HasPrefix(payload, []byte("HTTP/")) 
+	payload := ctx.UDP.Payload
+	isSSDPLike := bytes.HasPrefix(payload, []byte("NOTIFY ")) || bytes.HasPrefix(payload, []byte("HTTP/"))
 	if len(payload) == 0 || !isSSDPLike {
 		return nil
 	}
-	// Search for services
 	if bytes.HasPrefix(payload, []byte("M-SEARCH ")) {
 		return nil
 	}
@@ -43,17 +42,17 @@ func (s *SSDPAnalyzer) Analyze(packet gopacket.Packet) []asset.Observation {
 	if len(headers) == 0 {
 		return nil
 	}
-	mac, ok := ethSrcMAC(packet)
+	mac, ok := ethSrcMACFromCtx(ctx)
 	if !ok {
 		return nil
 	}
-	observedAt := packet.Metadata().Timestamp
+	observedAt := ctx.ObservedAt()
 	obs := asset.Observation{
 		Source:     asset.SourceSSDP,
 		ObservedAt: observedAt,
 		MAC:        asset.CloneMAC(mac),
 	}
-	fillObsIPs(&obs, packet, observedAt)
+	fillObsIPsFromCtx(&obs, ctx, observedAt)
 	applyServerScalars(&obs, headers["server"])
 	obs.DeviceType = ssdpDeviceType(headers["st"], headers["nt"])
 

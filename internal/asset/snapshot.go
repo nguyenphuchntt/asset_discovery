@@ -28,6 +28,7 @@ type AssetSnapshot struct {
 	Status    Status
 }
 
+// Snapshot (deep copy)
 func (a *Asset) Snapshot() AssetSnapshot {
 	return AssetSnapshot{
 		ID: a.ID,

@@ -34,12 +34,17 @@ type DHCPv6Analyzer struct{}
 func NewDHCPv6Analyzer() *DHCPv6Analyzer { return &DHCPv6Analyzer{} }
 
 func (d *DHCPv6Analyzer) Analyze(packet gopacket.Packet) []asset.Observation {
-	dhcp6, ok := packet.Layer(layers.LayerTypeDHCPv6).(*layers.DHCPv6)
-	if !ok {
+	ctx := DecodePacketCtx(packet)
+	return d.AnalyzeCtx(&ctx)
+}
+
+func (d *DHCPv6Analyzer) AnalyzeCtx(ctx *PacketCtx) []asset.Observation {
+	if ctx == nil || ctx.DHCPv6 == nil {
 		return nil
 	}
-	observedAt := packet.Metadata().Timestamp
-	mac, ok := dhcpv6MAC(packet)
+	dhcp6 := ctx.DHCPv6
+	observedAt := ctx.ObservedAt()
+	mac, ok := dhcpv6MACFromCtx(ctx)
 	if !ok {
 		return nil
 	}
@@ -53,7 +58,7 @@ func (d *DHCPv6Analyzer) Analyze(packet gopacket.Packet) []asset.Observation {
 		MAC:        asset.CloneMAC(mac),
 		Extra:      extras,
 	}
-	if ip6 := dhcpv6SourceIP(packet); ip6 != "" {
+	if ip6 := dhcpv6SourceIPFromCtx(ctx); ip6 != "" {
 		obs.IPv6s = map[string]asset.IPEntry{ip6: {
 			FirstSeen: observedAt,
 			LastSeen:  observedAt,
@@ -70,23 +75,18 @@ func (d *DHCPv6Analyzer) Analyze(packet gopacket.Packet) []asset.Observation {
 	return []asset.Observation{obs}
 }
 
-func dhcpv6MAC(packet gopacket.Packet) (net.HardwareAddr, bool) {
-	eth, ok := packet.Layer(layers.LayerTypeEthernet).(*layers.Ethernet)
-	if !ok {
+func dhcpv6MACFromCtx(ctx *PacketCtx) (net.HardwareAddr, bool) {
+	if ctx == nil || ctx.Ethernet == nil || !isUsableMAC(ctx.Ethernet.SrcMAC) {
 		return nil, false
 	}
-	if !isUsableMAC(eth.SrcMAC) {
-		return nil, false
-	}
-	return eth.SrcMAC, true
+	return ctx.Ethernet.SrcMAC, true
 }
 
-func dhcpv6SourceIP(packet gopacket.Packet) string {
-	v6, ok := packet.Layer(layers.LayerTypeIPv6).(*layers.IPv6)
-	if !ok {
+func dhcpv6SourceIPFromCtx(ctx *PacketCtx) string {
+	if ctx == nil || ctx.IPv6 == nil {
 		return ""
 	}
-	src := v6.SrcIP
+	src := ctx.IPv6.SrcIP
 	if src == nil || src.IsLinkLocalUnicast() {
 		return ""
 	}

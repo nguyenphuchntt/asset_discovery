@@ -19,29 +19,32 @@ type MDNSAnalyzer struct{}
 func NewMDNSAnalyzer() *MDNSAnalyzer { return &MDNSAnalyzer{} }
 
 func (m *MDNSAnalyzer) Analyze(packet gopacket.Packet) []asset.Observation {
-	udp, ok := packet.Layer(layers.LayerTypeUDP).(*layers.UDP)
-	if !ok || (udp.SrcPort != 5353 && udp.DstPort != 5353) {
+	ctx := DecodePacketCtx(packet)
+	return m.AnalyzeCtx(&ctx)
+}
+
+func (m *MDNSAnalyzer) AnalyzeCtx(ctx *PacketCtx) []asset.Observation {
+	if ctx == nil || ctx.UDP == nil || (ctx.UDP.SrcPort != 5353 && ctx.UDP.DstPort != 5353) {
 		return nil
 	}
-	dns, ok := packet.Layer(layers.LayerTypeDNS).(*layers.DNS)
-	if !ok || !dns.QR { // query 
+	if ctx.DNS == nil || !ctx.DNS.QR {
 		return nil
 	}
 
-	mac, ok := ethSrcMAC(packet)
+	mac, ok := ethSrcMACFromCtx(ctx)
 	if !ok {
 		return nil
 	}
 
-	observedAt := packet.Metadata().Timestamp
+	observedAt := ctx.ObservedAt()
 	obs := asset.Observation{
 		Source:     asset.SourceMDNS,
 		ObservedAt: observedAt,
 		MAC:        asset.CloneMAC(mac),
 	}
-	fillObsIPs(&obs, packet, observedAt)
-	obs.Hostnames = mDNSHostnames(dns)
-	obs.Services = mDNSServices(dns, observedAt)
+	fillObsIPsFromCtx(&obs, ctx, observedAt)
+	obs.Hostnames = mDNSHostnames(ctx.DNS)
+	obs.Services = mDNSServices(ctx.DNS, observedAt)
 
 	if !obs.Valid() {
 		return nil
@@ -49,22 +52,24 @@ func (m *MDNSAnalyzer) Analyze(packet gopacket.Packet) []asset.Observation {
 	return []asset.Observation{obs}
 }
 
-func ethSrcMAC(packet gopacket.Packet) (net.HardwareAddr, bool) {
-	eth, ok := packet.Layer(layers.LayerTypeEthernet).(*layers.Ethernet)
-	if !ok || !isUsableMAC(eth.SrcMAC) {
+func ethSrcMACFromCtx(ctx *PacketCtx) (net.HardwareAddr, bool) {
+	if ctx == nil || ctx.Ethernet == nil || !isUsableMAC(ctx.Ethernet.SrcMAC) {
 		return nil, false
 	}
-	return eth.SrcMAC, true
+	return ctx.Ethernet.SrcMAC, true
 }
 
-func fillObsIPs(obs *asset.Observation, packet gopacket.Packet, observedAt time.Time) {
-	if v4 := packet.Layer(layers.LayerTypeIPv4); v4 != nil {
-		if s := asset.NormalizeIPv4Addr(v4.(*layers.IPv4).SrcIP); s != "" {
+func fillObsIPsFromCtx(obs *asset.Observation, ctx *PacketCtx, observedAt time.Time) {
+	if ctx == nil {
+		return
+	}
+	if ctx.IPv4 != nil {
+		if s := asset.NormalizeIPv4Addr(ctx.IPv4.SrcIP); s != "" {
 			obs.IPv4s = map[string]asset.IPEntry{s: {FirstSeen: observedAt, LastSeen: observedAt, IsActive: true}}
 		}
 	}
-	if v6 := packet.Layer(layers.LayerTypeIPv6); v6 != nil {
-		src := v6.(*layers.IPv6).SrcIP
+	if ctx.IPv6 != nil {
+		src := ctx.IPv6.SrcIP
 		if src != nil && !src.IsLinkLocalUnicast() {
 			if s := asset.NormalizeIPv6Addr(src); s != "" {
 				obs.IPv6s = map[string]asset.IPEntry{s: {FirstSeen: observedAt, LastSeen: observedAt, IsActive: true}}

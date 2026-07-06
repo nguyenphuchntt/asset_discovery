@@ -93,6 +93,8 @@ func (f *FileSource) Run(ctx context.Context, out chan<- RawPacket) error {
 	defer f.markRunDone()
 
 	packetSource := gopacket.NewPacketSource(f.handle, f.linkType)
+	packetSource.DecodeOptions.Lazy = true
+	packetSource.DecodeOptions.NoCopy = true
 	return pump(ctx, packetSource.Packets(), f.closed, out,
 		SourceRef{Kind: f.Kind(), Name: f.Name()},
 		f.stats)

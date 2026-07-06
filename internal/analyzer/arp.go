@@ -16,21 +16,22 @@ type ARPAnalyzer struct{}
 func NewARPAnalyzer() *ARPAnalyzer { return &ARPAnalyzer {} }
 
 func (a *ARPAnalyzer) Analyze(packet gopacket.Packet) []asset.Observation {
-	layer := packet.Layer(layers.LayerTypeARP)
-	if layer == nil {
+	ctx := DecodePacketCtx(packet)
+	return a.AnalyzeCtx(&ctx)
+}
+
+func (a *ARPAnalyzer) AnalyzeCtx(ctx *PacketCtx) []asset.Observation {
+	if ctx == nil || ctx.ARP == nil {
 		return nil
 	}
-	arp, ok := layer.(*layers.ARP)
-	if !ok {
-		return nil
-	}
+	arp := ctx.ARP
 
 	srcMAC := net.HardwareAddr(arp.SourceHwAddress)
 	dstMAC := net.HardwareAddr(arp.DstHwAddress)
 	srcIP := net.IP(arp.SourceProtAddress)
 	dstIP := net.IP(arp.DstProtAddress)
 
-	observedAt := packet.Metadata().Timestamp
+	observedAt := ctx.ObservedAt()
 	opName := arpOperationName(arp)
 
 	out := make([]asset.Observation, 0, 2)
