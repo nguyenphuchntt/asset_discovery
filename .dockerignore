@@ -1,0 +1,48 @@
+# ============================================================
+# .dockerignore — Exclude non-essential files from Docker context
+# ============================================================
+
+# Version control
+.git
+.github
+.gitignore
+.gitattributes
+
+# IDE / editor
+.claude
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# Documentation (keep README.md)
+*.md
+!README.md
+
+# Test fixtures & coverage
+test/
+*.test
+*.out
+coverage.*
+
+# PCAP files (mounted via volumes, not baked into image)
+*.pcap
+*.pcapng
+
+# Environment
+.env
+.env.*
+
+# Build artifacts (rebuilt inside Docker)
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Docs & UI
+docs/
+ui/
+
+# Go workspace
+go.work
