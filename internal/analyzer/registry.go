@@ -1,8 +1,10 @@
 package analyzer
 
 import (
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/layers"
+
 	"passivediscovery/internal/asset"
-	"passivediscovery/internal/decode"
 )
 
 type Registry struct { // Analyzer Registry
@@ -11,9 +13,9 @@ type Registry struct { // Analyzer Registry
 
 func NewRegistry(analyzers ...Analyzer) *Registry {
 	copied := make([]Analyzer, 0, len(analyzers))
-	for _, analyzer := range analyzers {
-		if analyzer != nil {
-			copied = append(copied, analyzer)
+	for _, a := range analyzers {
+		if a != nil {
+			copied = append(copied, a)
 		}
 	}
 	return &Registry{analyzers: copied}
@@ -21,19 +23,34 @@ func NewRegistry(analyzers ...Analyzer) *Registry {
 
 func DefaultRegistry() *Registry {
 	return NewRegistry(
+		NewEthernetAnalyzer(),
 		NewARPAnalyzer(),
 		NewDHCPAnalyzer(),
+		NewMDNSAnalyzer(),
+		NewSSDPAnalyzer(),
+		NewDHCPv6Analyzer(),
 	)
 }
 
-func (r *Registry) Analyze(packet decode.DecodedPacket) []asset.Observation {
-	if r == nil {
+func (r *Registry) AnalyzeCtx(ctx *PacketCtx) []asset.Observation {
+	if r == nil || ctx == nil {
 		return nil
 	}
 
-	observations := make([]asset.Observation, 0, len(r.analyzers)) // default 
-	for _, analyzer := range r.analyzers {
-		observations = append(observations, analyzer.Analyze(packet)...) // unpacking operator
+	var observations []asset.Observation
+
+	for _, a := range r.analyzers {
+		observations = append(observations, a.AnalyzeCtx(ctx)...)
 	}
 	return observations
 }
+
+func (r *Registry) Analyze(packet gopacket.Packet) []asset.Observation {
+	if r == nil {
+		return nil
+	}
+	ctx := DecodePacketCtx(packet)
+	return r.AnalyzeCtx(&ctx)
+}
+
+var _ = layers.LayerTypeEthernet 

@@ -32,8 +32,6 @@ used queries
 
 .env
 
-.env.*
-
 /docs
 
-/test/data
+/output

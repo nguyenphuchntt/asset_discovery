@@ -1,10 +1,12 @@
 package analyzer
 
 import (
+	"github.com/google/gopacket"
+
 	"passivediscovery/internal/asset"
-	"passivediscovery/internal/decode"
 )
 
 type Analyzer interface {
-	Analyze(packet decode.DecodedPacket) []asset.Observation
+	Analyze(packet gopacket.Packet) []asset.Observation
+	AnalyzeCtx(ctx *PacketCtx) []asset.Observation
 }

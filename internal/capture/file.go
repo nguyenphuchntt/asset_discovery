@@ -2,170 +2,121 @@ package capture
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"sync"
-	"time"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
 )
 
-var (
-	ErrOutputChanelNotFound = errors.New("Output channel not found")
-	ErrSourceAlreadyRun = errors.New("Source is already run")
-)
-
 type FileSource struct {
 	sourcePath string
-	handle *pcap.Handle
-	linkType layers.LinkType
+	bpfExpr    string
+	handle     *pcap.Handle
+	linkType   layers.LinkType
 	sourceName string
 
-	mu sync.Mutex
-	stats CaptureStats
+	stats *Stats
 
+	mu         sync.Mutex
 	runStarted bool
-	closed chan struct{}
+
 	closeOnce sync.Once
+	closed    chan struct{}
+	runDone   chan struct{}
+}
+
+type FileOptions struct {
+	Path string
+	BPF  string
 }
 
 var _ Source = (*FileSource)(nil)
 
-func NewFileSource(sourcePath string) (*FileSource, error) {
-	handle, err := pcap.OpenOffline(sourcePath)
-	if err != nil {
-		return nil, err
+func NewFileSource(opts FileOptions) (*FileSource, error) {
+	if opts.Path == "" {
+		return nil, ErrInvalidPath
 	}
-
-	f := &FileSource{
-		sourcePath: sourcePath,
-		sourceName: sourcePath,
+	handle, err := pcap.OpenOffline(opts.Path)
+	if err != nil {
+		return nil, fmt.Errorf("capture: open offline %q: %w", opts.Path, err)
+	}
+	bpf, err := CompileBPF(opts.BPF)
+	if err != nil {
+		handle.Close()
+		return nil, fmt.Errorf("capture: compile BPF: %w", err)
+	}
+	if err := bpf.Apply(handle); err != nil {
+		handle.Close()
+		return nil, fmt.Errorf("capture: apply BPF: %w", err)
+	}
+	name := "file_source:" + opts.Path
+	return &FileSource{
+		sourcePath: opts.Path,
+		bpfExpr:    opts.BPF,
 		handle:     handle,
 		linkType:   handle.LinkType(),
+		sourceName: name,
+		stats:      NewStats(name, SourceKindFile),
 		closed:     make(chan struct{}),
-		stats: CaptureStats{
-			SourceName: sourcePath,
-			SourceKind: SourceKindFile,
-		},
-	}
- 
-	return f, nil
+		runDone:    make(chan struct{}),
+	}, nil
 }
 
-func (f *FileSource) Name() string {
-	return f.sourceName
-}
+func (f *FileSource) Name() string              { return f.sourceName }
+func (f *FileSource) Kind() SourceKind          { return SourceKindFile }
+func (f *FileSource) LinkType() layers.LinkType { return f.linkType }
 
-func (f *FileSource) Kind() SourceKind {
-	return SourceKindFile
-}
-
-func (f *FileSource) LinkType() layers.LinkType {
-	return f.linkType
-}
 
 func (f *FileSource) Close() error {
-	f.closeHandle()
-	return nil
-}
-
-func (f *FileSource) closeHandle() {
 	f.closeOnce.Do(func() {
+		if f.handle != nil {
+			f.handle.Close()
+		}
 		close(f.closed)
-		f.handle.Close()
 	})
-}
-
-func (f *FileSource) markRunStarted() error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	if f.runStarted {
-		return ErrSourceAlreadyRun
+	select {
+	case <-f.runDone:
+	case <-defaultCloseWait():
 	}
-	f.runStarted = true
 	return nil
 }
 
 func (f *FileSource) Run(ctx context.Context, out chan<- RawPacket) error {
 	if out == nil {
-		return ErrOutputChanelNotFound
+		return ErrOutputChannelNil
 	}
-	if err := f.markRunStarted(); err != nil {
-		return err
+	if !f.markRunStarted() {
+		return ErrSourceAlreadyRun
 	}
-	defer f.closeHandle()
- 
+	defer f.markRunDone()
+
 	packetSource := gopacket.NewPacketSource(f.handle, f.linkType)
-	packets := packetSource.Packets()
- 
-	for {
-		select {
-		case <-ctx.Done(): // context closed
-			return ctx.Err()
-		case <-f.closed: // file source closed
-			return nil
-		case packet, ok := <-packets:
-			if !ok {
-				return nil
-			}
-			rawPacket := f.newRawPacket(packet)
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-f.closed:
-				return nil
-			case out <- rawPacket:
-				f.recordReceived(rawPacket)
-			}
-		}
-	}
+	packetSource.DecodeOptions.Lazy = true
+	packetSource.DecodeOptions.NoCopy = true
+	return pump(ctx, packetSource.Packets(), f.closed, out,
+		SourceRef{Kind: f.Kind(), Name: f.Name()},
+		f.stats)
 }
 
-func (f *FileSource) CaptureStats() (CaptureStats, error) {
+func (f *FileSource) Stats() (StatsSnapshot, error) {
+	if f.stats == nil {
+		return StatsSnapshot{SourceName: f.sourceName, SourceKind: SourceKindFile}, nil
+	}
+	return f.stats.Snapshot(), nil
+}
+
+func (f *FileSource) markRunStarted() bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-
-	return f.stats, nil
+	if f.runStarted {
+		return false
+	}
+	f.runStarted = true
+	return true
 }
 
-func (f *FileSource) newRawPacket(packet gopacket.Packet) RawPacket {
-	capturedAt := time.Now() // fallback
-	length := 0
-	captureLength := 0
- 
-	if metadata := packet.Metadata(); metadata != nil {
-		captureInfo := metadata.CaptureInfo
-		if !captureInfo.Timestamp.IsZero() {
-			capturedAt = captureInfo.Timestamp
-		}
-		length = captureInfo.Length
-		captureLength = captureInfo.CaptureLength
-	}
- 
-	return RawPacket{
-		Packet:        packet,
-		SourceName:    f.sourceName,
-		SourceKind:    SourceKindFile,
-		CapturedAt:    capturedAt,
-		Length:        length,
-		CaptureLength: captureLength,
-		LinkType:      f.linkType,
-	}
-}
-
-func (f *FileSource) recordReceived(packet RawPacket) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	f.stats.Received++
-	if packet.Length > 0 {
-		f.stats.Bytes += uint64(packet.Length)
-		return
-	}
-	// else
-	if packet.CaptureLength > 0 {
-		f.stats.Bytes += uint64(packet.CaptureLength)
-	}
+func (f *FileSource) markRunDone() {
+	close(f.runDone)
 }

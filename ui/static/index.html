@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>passivediscovery · dashboard</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">passivediscovery</div>
+    <div class="status">
+      <span id="connStatus" class="badge ok">loading…</span>
+      <span id="lastUpdated" class="muted">—</span>
+      <span id="refreshInterval" class="muted"></span>
+      <button id="refreshBtn" type="button" title="Refresh now">↻</button>
+    </div>
+  </header>
+
+  <section id="statsBar" class="stats" aria-label="Runtime statistics"></section>
+
+  <section class="filters" aria-label="Filters">
+    <input id="qFilter" type="search" placeholder="Search MAC / IP / hostname / MAC vendor" autocomplete="off" />
+    <select id="statusFilter">
+      <option value="">All statuses</option>
+      <option value="online">online</option>
+      <option value="offline">offline</option>
+    </select>
+    <select id="vendorFilter">
+      <option value="">All MAC vendors</option>
+    </select>
+    <button id="resetFilters" type="button">Reset</button>
+  </section>
+
+  <main class="layout">
+    <section class="panel" aria-label="Assets">
+      <div class="panel-header">
+        <h2>Assets</h2>
+        <span id="assetCount" class="muted">0</span>
+      </div>
+      <div class="table-wrap">
+        <table id="assetTable">
+          <thead>
+            <tr>
+              <th>Status</th>
+              <th>IP</th>
+              <th>MAC</th>
+              <th>Hostname</th>
+              <th>MAC Vendor</th>
+              <th>Device</th>
+              <th>OS</th>
+              <th>Last Seen</th>
+              <th>Seen</th>
+            </tr>
+          </thead>
+          <tbody id="assetTbody"></tbody>
+        </table>
+        <div id="assetEmpty" class="empty hidden">No assets match current filters.</div>
+        <div id="assetLoading" class="loading">Loading assets…</div>
+      </div>
+      <div class="pagination">
+        <button id="prevPage" type="button" disabled>‹ prev</button>
+        <span id="pageInfo" class="muted">—</span>
+        <button id="nextPage" type="button" disabled>next ›</button>
+      </div>
+    </section>
+
+    <aside class="panel" aria-label="Recent events">
+      <div class="panel-header">
+        <h2>Events</h2>
+        <span id="eventCount" class="muted">0</span>
+      </div>
+      <ul id="eventList" class="events"></ul>
+      <div id="eventEmpty" class="empty hidden">No events yet.</div>
+    </aside>
+  </main>
+
+  <div id="drawer" class="drawer hidden" aria-hidden="true">
+    <div class="drawer-inner">
+      <header>
+        <h3 id="drawerTitle">asset</h3>
+        <button id="closeDrawer" type="button">×</button>
+      </header>
+      <div id="drawerBody" class="drawer-body">
+        <p class="muted">Loading…</p>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden" role="status"></div>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

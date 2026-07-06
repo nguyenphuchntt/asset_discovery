@@ -1,10 +1,19 @@
-// wiring.go will translate config.Config into concrete implementations.
-//
-// It should decide:
-// - FileSource versus LiveSource;
-// - analyzer set enabled for minimal/full modes;
-// - SQLite repository path;
-// - OUI lookup source;
-// - API bind address;
-// - lifecycle thresholds and flush intervals.
 package pipeline
+
+import (
+	"context"
+	"log/slog"
+
+	"passivediscovery/internal/capture"
+)
+
+func PumpSource(ctx context.Context, source capture.Source, out chan<- capture.RawPacket, errCh chan<- error) {
+	defer close(out)
+	logger := slog.Default().With(slog.String("component", "pipeline.source"))
+
+	logger.Info("source started",
+		slog.String("name", source.Name()),
+		slog.String("kind", string(source.Kind())),
+	)
+	errCh <- source.Run(ctx, out)
+}
