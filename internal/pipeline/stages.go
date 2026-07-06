@@ -1,12 +1,17 @@
-// stages.go will describe the channel boundaries between runtime stages.
-//
-// Expected stages:
-// - raw packets from capture.Source;
-// - decoded packets from decode.Decoder;
-// - observations from analyzer.Registry;
-// - asset/events from asset.Manager;
-// - persistence batches and stats snapshots.
-//
-// The file should keep backpressure behavior explicit so live capture does not
-// grow memory unbounded when downstream processing is slower than input traffic.
 package pipeline
+
+import "sync/atomic"
+
+type Counters struct {
+	processed atomic.Int64
+	applied   atomic.Int64
+	dropped   atomic.Int64
+}
+
+func (c *Counters) AddProcessed(n int) { c.processed.Add(int64(n)) }
+func (c *Counters) AddApplied(n int)   { c.applied.Add(int64(n)) }
+func (c *Counters) AddDropped(n int)   { c.dropped.Add(int64(n)) }
+
+func (c *Counters) Snapshot() (processed, applied, dropped int) {
+	return int(c.processed.Load()), int(c.applied.Load()), int(c.dropped.Load())
+}
