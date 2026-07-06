@@ -67,7 +67,6 @@ CREATE TABLE IF NOT EXISTS asset_events (
     at TEXT NOT NULL,
     source TEXT NOT NULL,
     detail TEXT,
-    metadata_json TEXT,
     inserted_at TEXT NOT NULL,
     FOREIGN KEY (asset_id) REFERENCES assets(id)
 );

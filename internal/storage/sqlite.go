@@ -313,12 +313,11 @@ func insertIPRow(ctx context.Context, tx *sql.Tx, assetID, ip string, ver int, e
 func insertEvent(ctx context.Context, tx *sql.Tx, ev asset.Event, runID string) error {
 	evID := deterministicEventID(ev, runID)
 	const q = `INSERT OR IGNORE INTO asset_events
-		(id, run_id, asset_id, type, at, source, detail, metadata_json, inserted_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		(id, run_id, asset_id, type, at, source, detail, inserted_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 	_, err := tx.ExecContext(ctx, q,
 		evID, nullString(runID), ev.AssetID, ev.Type,
 		timeFmt(ev.At), ev.Source, ev.Detail,
-		marshalEventMetadata(ev.Metadata),
 		timeFmt(time.Now().UTC()),
 	)
 	if err != nil {
@@ -466,12 +465,4 @@ func marshalExtras(m map[string]any) string {
 	}
 	b, _ := json.Marshal(m) // encode anything into []byte contains JSON text
 	return string(b)
-}
-
-func marshalEventMetadata(m map[string]any) sql.NullString {
-	if len(m) == 0 {
-		return sql.NullString{}
-	}
-	b, _ := json.Marshal(m)
-	return sql.NullString{String: string(b), Valid: true}
 }
