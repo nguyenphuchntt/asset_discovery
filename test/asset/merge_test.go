@@ -1,6 +1,7 @@
 package asset_test
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -29,7 +30,7 @@ func TestMerge_NewIPv4Added(t *testing.T) {
 	mac := mustMAC(t, "aa:bb:cc:dd:ee:01")
 	now := time.Now()
 
-	m.Apply(asset.Observation{
+	m.Apply(context.Background(), asset.Observation{
 		Source:     asset.SourceARP,
 		ObservedAt: now,
 		MAC:        mac,
@@ -51,7 +52,7 @@ func TestMerge_ExistingIPv4LastSeenUpdated(t *testing.T) {
 	now := time.Now()
 	later := now.Add(time.Minute)
 
-	m.Apply(asset.Observation{
+	m.Apply(context.Background(), asset.Observation{
 		Source:     asset.SourceARP,
 		ObservedAt: now,
 		MAC:        mac,
@@ -59,7 +60,7 @@ func TestMerge_ExistingIPv4LastSeenUpdated(t *testing.T) {
 			"10.0.0.2": {FirstSeen: now, LastSeen: now, IsActive: true},
 		},
 	})
-	m.Apply(asset.Observation{
+	m.Apply(context.Background(), asset.Observation{
 		Source:     asset.SourceARP,
 		ObservedAt: later,
 		MAC:        mac,
@@ -80,7 +81,7 @@ func TestMerge_IPv4LeaseExtended(t *testing.T) {
 	mac := mustMAC(t, "aa:bb:cc:dd:ee:03")
 	now := time.Now()
 
-	m.Apply(asset.Observation{
+	m.Apply(context.Background(), asset.Observation{
 		Source:     asset.SourceDHCPv4,
 		ObservedAt: now,
 		MAC:        mac,
@@ -88,7 +89,7 @@ func TestMerge_IPv4LeaseExtended(t *testing.T) {
 			"10.0.0.3": {FirstSeen: now, LastSeen: now, Lease: time.Hour, IsActive: true},
 		},
 	})
-	m.Apply(asset.Observation{
+	m.Apply(context.Background(), asset.Observation{
 		Source:     asset.SourceDHCPv4,
 		ObservedAt: now,
 		MAC:        mac,
@@ -109,11 +110,11 @@ func TestMerge_NewHostnameAdded(t *testing.T) {
 	mac := mustMAC(t, "aa:bb:cc:dd:ee:04")
 	now := time.Now()
 
-	m.Apply(asset.Observation{
+	m.Apply(context.Background(), asset.Observation{
 		Source: asset.SourceDHCPv4, ObservedAt: now, MAC: mac,
 		Hostnames: []string{"host-a"},
 	})
-	m.Apply(asset.Observation{
+	m.Apply(context.Background(), asset.Observation{
 		Source: asset.SourceMDNS, ObservedAt: now, MAC: mac,
 		Hostnames: []string{"host-b"},
 	})
@@ -130,8 +131,8 @@ func TestMerge_DuplicateHostnameDeduped(t *testing.T) {
 	mac := mustMAC(t, "aa:bb:cc:dd:ee:05")
 	now := time.Now()
 
-	m.Apply(asset.Observation{Source: asset.SourceDHCPv4, ObservedAt: now, MAC: mac, Hostnames: []string{"dup-host"}})
-	m.Apply(asset.Observation{Source: asset.SourceDHCPv4, ObservedAt: now, MAC: mac, Hostnames: []string{"dup-host"}})
+	m.Apply(context.Background(), asset.Observation{Source: asset.SourceDHCPv4, ObservedAt: now, MAC: mac, Hostnames: []string{"dup-host"}})
+	m.Apply(context.Background(), asset.Observation{Source: asset.SourceDHCPv4, ObservedAt: now, MAC: mac, Hostnames: []string{"dup-host"}})
 
 	snap := m.Snapshot()[0]
 	if len(snap.Hostnames) != 1 {
@@ -145,7 +146,7 @@ func TestMerge_NewServiceAdded(t *testing.T) {
 	mac := mustMAC(t, "aa:bb:cc:dd:ee:06")
 	now := time.Now()
 
-	m.Apply(asset.Observation{
+	m.Apply(context.Background(), asset.Observation{
 		Source: asset.SourceMDNS, ObservedAt: now, MAC: mac,
 		Services: []asset.Service{{Protocol: "tcp", Port: 80, Name: "http"}},
 	})
@@ -165,9 +166,9 @@ func TestMerge_DuplicateServiceDeduped(t *testing.T) {
 	mac := mustMAC(t, "aa:bb:cc:dd:ee:07")
 	now := time.Now()
 
-	m.Apply(asset.Observation{Source: asset.SourceMDNS, ObservedAt: now, MAC: mac,
+	m.Apply(context.Background(), asset.Observation{Source: asset.SourceMDNS, ObservedAt: now, MAC: mac,
 		Services: []asset.Service{{Protocol: "tcp", Port: 80, Name: "http"}}})
-	m.Apply(asset.Observation{Source: asset.SourceMDNS, ObservedAt: now, MAC: mac,
+	m.Apply(context.Background(), asset.Observation{Source: asset.SourceMDNS, ObservedAt: now, MAC: mac,
 		Services: []asset.Service{{Protocol: "tcp", Port: 80, Name: "http"}}})
 
 	snap := m.Snapshot()[0]
@@ -182,9 +183,9 @@ func TestMerge_SamePortDifferentIsClient(t *testing.T) {
 	mac := mustMAC(t, "aa:bb:cc:dd:ee:08")
 	now := time.Now()
 
-	m.Apply(asset.Observation{Source: asset.SourceMDNS, ObservedAt: now, MAC: mac,
+	m.Apply(context.Background(), asset.Observation{Source: asset.SourceMDNS, ObservedAt: now, MAC: mac,
 		Services: []asset.Service{{Protocol: "tcp", Port: 443, Name: "https", IsClient: false}}})
-	m.Apply(asset.Observation{Source: asset.SourceEthernet, ObservedAt: now, MAC: mac,
+	m.Apply(context.Background(), asset.Observation{Source: asset.SourceEthernet, ObservedAt: now, MAC: mac,
 		Services: []asset.Service{{Protocol: "tcp", Port: 443, Name: "https", IsClient: true}}})
 
 	snap := m.Snapshot()[0]
@@ -199,9 +200,9 @@ func TestMerge_ScalarFirstWins(t *testing.T) {
 	mac := mustMAC(t, "aa:bb:cc:dd:ee:09")
 	now := time.Now()
 
-	m.Apply(asset.Observation{Source: asset.SourceDHCPv4, ObservedAt: now, MAC: mac,
+	m.Apply(context.Background(), asset.Observation{Source: asset.SourceDHCPv4, ObservedAt: now, MAC: mac,
 		OS: "Linux", DeviceType: "server", Model: "RPi"})
-	m.Apply(asset.Observation{Source: asset.SourceSSDP, ObservedAt: now, MAC: mac,
+	m.Apply(context.Background(), asset.Observation{Source: asset.SourceSSDP, ObservedAt: now, MAC: mac,
 		OS: "Windows", DeviceType: "workstation", Model: "Surface"})
 
 	snap := m.Snapshot()[0]
@@ -222,9 +223,9 @@ func TestMerge_ExtrasMerge(t *testing.T) {
 	mac := mustMAC(t, "aa:bb:cc:dd:ee:0a")
 	now := time.Now()
 
-	m.Apply(asset.Observation{Source: asset.SourceARP, ObservedAt: now, MAC: mac,
+	m.Apply(context.Background(), asset.Observation{Source: asset.SourceARP, ObservedAt: now, MAC: mac,
 		Extra: map[string]any{"arp_operation": "request"}})
-	m.Apply(asset.Observation{Source: asset.SourceARP, ObservedAt: now, MAC: mac,
+	m.Apply(context.Background(), asset.Observation{Source: asset.SourceARP, ObservedAt: now, MAC: mac,
 		Extra: map[string]any{"arp_mac_randomized": true}})
 
 	snap := m.Snapshot()[0]
@@ -242,9 +243,9 @@ func TestMerge_SeenCountIncrements(t *testing.T) {
 	mac := mustMAC(t, "aa:bb:cc:dd:ee:0b")
 	now := time.Now()
 
-	m.Apply(asset.Observation{Source: asset.SourceARP, ObservedAt: now, MAC: mac})
-	m.Apply(asset.Observation{Source: asset.SourceARP, ObservedAt: now, MAC: mac})
-	m.Apply(asset.Observation{Source: asset.SourceARP, ObservedAt: now, MAC: mac})
+	m.Apply(context.Background(), asset.Observation{Source: asset.SourceARP, ObservedAt: now, MAC: mac})
+	m.Apply(context.Background(), asset.Observation{Source: asset.SourceARP, ObservedAt: now, MAC: mac})
+	m.Apply(context.Background(), asset.Observation{Source: asset.SourceARP, ObservedAt: now, MAC: mac})
 
 	snap := m.Snapshot()[0]
 	if snap.SeenCount != 3 {
@@ -259,8 +260,8 @@ func TestMerge_FirstAndLastSeenCorrect(t *testing.T) {
 	t1 := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
 	t2 := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 
-	m.Apply(asset.Observation{Source: asset.SourceARP, ObservedAt: t1, MAC: mac})
-	m.Apply(asset.Observation{Source: asset.SourceARP, ObservedAt: t2, MAC: mac})
+	m.Apply(context.Background(), asset.Observation{Source: asset.SourceARP, ObservedAt: t1, MAC: mac})
+	m.Apply(context.Background(), asset.Observation{Source: asset.SourceARP, ObservedAt: t2, MAC: mac})
 
 	snap := m.Snapshot()[0]
 	if snap.FirstSeen != t1 {

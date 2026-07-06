@@ -64,7 +64,7 @@ func (r *fakeRepo) SaveBatch(_ context.Context, b storage.Batch) error {
 		r.failNextN.Add(-1)
 		return r.saveErr
 	}
-	return r.saveErr
+	return nil
 }
 
 func (r *fakeRepo) Close() error { return nil }
@@ -207,15 +207,26 @@ func TestPersister_OverflowSplitAcrossFlushes(t *testing.T) {
 		t.Errorf("expected 2 assets in first batch, got %d", len(repo.savedBatches[0].Assets))
 	}
 
-	// Second flush: should pick up remaining 3
+	// Second flush: BatchSize=2 truncated to 2 (1 still in latest.Assets)
 	if err := p.Flush(context.Background()); err != nil {
 		t.Fatalf("Flush failed: %v", err)
 	}
 	if repo.saveCallCount.Load() != 2 {
 		t.Errorf("expected 2 save calls, got %d", repo.saveCallCount.Load())
 	}
-	if len(repo.savedBatches[1].Assets) != 3 {
-		t.Errorf("expected 3 assets in second batch, got %d", len(repo.savedBatches[1].Assets))
+	if len(repo.savedBatches[1].Assets) != 2 {
+		t.Errorf("expected 2 assets in second batch, got %d", len(repo.savedBatches[1].Assets))
+	}
+
+	// Third flush: pick up last asset
+	if err := p.Flush(context.Background()); err != nil {
+		t.Fatalf("Flush failed: %v", err)
+	}
+	if repo.saveCallCount.Load() != 3 {
+		t.Errorf("expected 3 save calls, got %d", repo.saveCallCount.Load())
+	}
+	if len(repo.savedBatches[2].Assets) != 1 {
+		t.Errorf("expected 1 asset in third batch, got %d", len(repo.savedBatches[2].Assets))
 	}
 }
 

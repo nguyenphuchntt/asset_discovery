@@ -1,6 +1,7 @@
 package asset_test
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -20,7 +21,7 @@ func TestSnapshot_DeepCopy(t *testing.T) {
 	mac := mustMAC(t, "aa:bb:cc:dd:ee:01")
 	now := time.Now()
 
-	m.Apply(asset.Observation{
+	m.Apply(context.Background(), asset.Observation{
 		Source:     asset.SourceARP,
 		ObservedAt: now,
 		MAC:        mac,
@@ -58,7 +59,7 @@ func TestSnapshot_ContainsAllFields(t *testing.T) {
 	mac := mustMAC(t, "aa:bb:cc:dd:ee:02")
 	now := time.Now()
 
-	m.Apply(asset.Observation{
+	m.Apply(context.Background(), asset.Observation{
 		Source:     asset.SourceARP,
 		ObservedAt: now,
 		MAC:        mac,

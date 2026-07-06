@@ -1,6 +1,7 @@
 package asset_test
 
 import (
+	"context"
 	"net"
 	"sync"
 	"testing"
@@ -32,7 +33,7 @@ func TestManager_Apply_NewAsset(t *testing.T) {
 	m := asset.NewManager(nil)
 	mac := mustMAC(t, "aa:bb:cc:dd:ee:ff")
 
-	res, err := m.Apply(asset.Observation{
+	res, err := m.Apply(context.Background(), asset.Observation{
 		Source:     asset.SourceARP,
 		ObservedAt: time.Now(),
 		MAC:        mac,
@@ -53,12 +54,12 @@ func TestManager_Apply_Updated(t *testing.T) {
 	m := asset.NewManager(nil)
 	mac := mustMAC(t, "aa:bb:cc:dd:ee:01")
 
-	r1, _ := m.Apply(asset.Observation{
+	r1, _ := m.Apply(context.Background(), asset.Observation{
 		Source:     asset.SourceARP,
 		ObservedAt: time.Now(),
 		MAC:        mac,
 	})
-	r2, _ := m.Apply(asset.Observation{
+	r2, _ := m.Apply(context.Background(), asset.Observation{
 		Source:     asset.SourceARP,
 		ObservedAt: time.Now(),
 		MAC:        mac,
@@ -78,7 +79,7 @@ func TestManager_Apply_Updated(t *testing.T) {
 func TestManager_Apply_InvalidSource(t *testing.T) {
 	t.Parallel()
 	m := asset.NewManager(nil)
-	_, err := m.Apply(asset.Observation{
+	_, err := m.Apply(context.Background(), asset.Observation{
 		Source:     "",
 		ObservedAt: time.Now(),
 		MAC:        mustMAC(t, "aa:bb:cc:dd:ee:02"),
@@ -94,7 +95,7 @@ func TestManager_Apply_InvalidSource(t *testing.T) {
 func TestManager_Apply_ZeroObservedTime(t *testing.T) {
 	t.Parallel()
 	m := asset.NewManager(nil)
-	_, err := m.Apply(asset.Observation{
+	_, err := m.Apply(context.Background(), asset.Observation{
 		Source:     asset.SourceARP,
 		ObservedAt: time.Time{},
 		MAC:        mustMAC(t, "aa:bb:cc:dd:ee:03"),
@@ -110,7 +111,7 @@ func TestManager_Apply_ZeroObservedTime(t *testing.T) {
 func TestManager_Apply_ZeroMAC(t *testing.T) {
 	t.Parallel()
 	m := asset.NewManager(nil)
-	_, err := m.Apply(asset.Observation{
+	_, err := m.Apply(context.Background(), asset.Observation{
 		Source:     asset.SourceARP,
 		ObservedAt: time.Now(),
 		MAC:        nil,
@@ -130,7 +131,7 @@ func TestManager_Apply_OfflineToOnlineTransition(t *testing.T) {
 	now := time.Now()
 
 	// First apply
-	m.Apply(asset.Observation{
+	m.Apply(context.Background(), asset.Observation{
 		Source:     asset.SourceARP,
 		ObservedAt: now,
 		MAC:        mac,
@@ -143,7 +144,7 @@ func TestManager_Apply_OfflineToOnlineTransition(t *testing.T) {
 	_ = m.DrainEvents()
 
 	// Apply again → should transition back to online
-	m.Apply(asset.Observation{
+	m.Apply(context.Background(), asset.Observation{
 		Source:     asset.SourceARP,
 		ObservedAt: now.Add(time.Hour + time.Minute),
 		MAC:        mac,
@@ -168,7 +169,7 @@ func TestManager_Apply_MultipleObsMergeIntoOneAsset(t *testing.T) {
 	now := time.Now()
 
 	// Three observations for same MAC, different sources
-	m.Apply(asset.Observation{
+	m.Apply(context.Background(), asset.Observation{
 		Source:     asset.SourceARP,
 		ObservedAt: now,
 		MAC:        mac,
@@ -176,13 +177,13 @@ func TestManager_Apply_MultipleObsMergeIntoOneAsset(t *testing.T) {
 			"10.0.0.1": {FirstSeen: now, LastSeen: now, IsActive: true},
 		},
 	})
-	m.Apply(asset.Observation{
+	m.Apply(context.Background(), asset.Observation{
 		Source:     asset.SourceDHCPv4,
 		ObservedAt: now,
 		MAC:        mac,
 		Hostnames:  []string{"my-host"},
 	})
-	m.Apply(asset.Observation{
+	m.Apply(context.Background(), asset.Observation{
 		Source:    asset.SourceSSDP,
 		ObservedAt: now,
 		MAC:       mac,
@@ -210,13 +211,13 @@ func TestManager_Apply_VendorFirstWins(t *testing.T) {
 	m := asset.NewManager(nil)
 	mac := mustMAC(t, "aa:bb:cc:dd:ee:06")
 
-	m.Apply(asset.Observation{
+	m.Apply(context.Background(), asset.Observation{
 		Source:     asset.SourceARP,
 		ObservedAt: time.Now(),
 		MAC:        mac,
 		MACVendor:  "Apple, Inc.",
 	})
-	m.Apply(asset.Observation{
+	m.Apply(context.Background(), asset.Observation{
 		Source:     asset.SourceMDNS,
 		ObservedAt: time.Now(),
 		MAC:        mac,
@@ -234,7 +235,7 @@ func TestManager_Apply_AssetIDFormat(t *testing.T) {
 	m := asset.NewManager(nil)
 	mac := mustMAC(t, "aa:bb:cc:dd:ee:07")
 
-	res, _ := m.Apply(asset.Observation{
+	res, _ := m.Apply(context.Background(), asset.Observation{
 		Source:     asset.SourceARP,
 		ObservedAt: time.Now(),
 		MAC:        mac,
@@ -250,7 +251,7 @@ func TestManager_Apply_ServicesAdded(t *testing.T) {
 	m := asset.NewManager(nil)
 	mac := mustMAC(t, "aa:bb:cc:dd:ee:08")
 
-	m.Apply(asset.Observation{
+	m.Apply(context.Background(), asset.Observation{
 		Source:     asset.SourceMDNS,
 		ObservedAt: time.Now(),
 		MAC:        mac,
@@ -280,7 +281,7 @@ func TestManager_Sweep_OfflineTransition(t *testing.T) {
 	mac := mustMAC(t, "aa:bb:cc:dd:ee:09")
 	now := time.Now()
 
-	m.Apply(asset.Observation{
+	m.Apply(context.Background(), asset.Observation{
 		Source:     asset.SourceARP,
 		ObservedAt: now,
 		MAC:        mac,
@@ -304,7 +305,7 @@ func TestManager_Sweep_StaysOnline(t *testing.T) {
 	mac := mustMAC(t, "aa:bb:cc:dd:ee:0a")
 	now := time.Now()
 
-	m.Apply(asset.Observation{
+	m.Apply(context.Background(), asset.Observation{
 		Source:     asset.SourceARP,
 		ObservedAt: now,
 		MAC:        mac,
@@ -329,7 +330,7 @@ func TestManager_Sweep_IPLeaseExpiry(t *testing.T) {
 	now := time.Now()
 
 	// Apply with a 1-hour lease
-	m.Apply(asset.Observation{
+	m.Apply(context.Background(), asset.Observation{
 		Source:     asset.SourceDHCPv4,
 		ObservedAt: now,
 		MAC:        mac,
@@ -360,7 +361,7 @@ func TestManager_DrainDirty_ReturnsAsset(t *testing.T) {
 	m := asset.NewManager(nil)
 	mac := mustMAC(t, "aa:bb:cc:dd:ee:0c")
 
-	m.Apply(asset.Observation{
+	m.Apply(context.Background(), asset.Observation{
 		Source:     asset.SourceARP,
 		ObservedAt: time.Now(),
 		MAC:        mac,
@@ -380,7 +381,7 @@ func TestManager_DrainDirty_ClearsDirty(t *testing.T) {
 	m := asset.NewManager(nil)
 	mac := mustMAC(t, "aa:bb:cc:dd:ee:0d")
 
-	m.Apply(asset.Observation{
+	m.Apply(context.Background(), asset.Observation{
 		Source:     asset.SourceARP,
 		ObservedAt: time.Now(),
 		MAC:        mac,
@@ -412,7 +413,7 @@ func TestManager_DrainEvents_AssetCreated(t *testing.T) {
 	m := asset.NewManager(nil)
 	mac := mustMAC(t, "aa:bb:cc:dd:ee:0e")
 
-	m.Apply(asset.Observation{
+	m.Apply(context.Background(), asset.Observation{
 		Source:     asset.SourceARP,
 		ObservedAt: time.Now(),
 		MAC:        mac,
@@ -435,7 +436,7 @@ func TestManager_DrainEvents_Clears(t *testing.T) {
 	m := asset.NewManager(nil)
 	mac := mustMAC(t, "aa:bb:cc:dd:ee:0f")
 
-	m.Apply(asset.Observation{
+	m.Apply(context.Background(), asset.Observation{
 		Source:     asset.SourceARP,
 		ObservedAt: time.Now(),
 		MAC:        mac,
@@ -454,7 +455,7 @@ func TestManager_DrainEvents_IPFirstSeen(t *testing.T) {
 	mac := mustMAC(t, "aa:bb:cc:dd:ee:10")
 	now := time.Now()
 
-	m.Apply(asset.Observation{
+	m.Apply(context.Background(), asset.Observation{
 		Source:     asset.SourceARP,
 		ObservedAt: now,
 		MAC:        mac,
@@ -493,8 +494,8 @@ func TestManager_Snapshot_ReturnsAllAssets(t *testing.T) {
 	t.Parallel()
 	m := asset.NewManager(nil)
 
-	m.Apply(asset.Observation{Source: asset.SourceARP, ObservedAt: time.Now(), MAC: mustMAC(t, "11:11:11:11:11:11")})
-	m.Apply(asset.Observation{Source: asset.SourceARP, ObservedAt: time.Now(), MAC: mustMAC(t, "22:22:22:22:22:22")})
+	m.Apply(context.Background(), asset.Observation{Source: asset.SourceARP, ObservedAt: time.Now(), MAC: mustMAC(t, "11:11:11:11:11:11")})
+	m.Apply(context.Background(), asset.Observation{Source: asset.SourceARP, ObservedAt: time.Now(), MAC: mustMAC(t, "22:22:22:22:22:22")})
 
 	if len(m.Snapshot()) != 2 {
 		t.Errorf("expected 2 assets, got %d", len(m.Snapshot()))
@@ -506,7 +507,7 @@ func TestManager_Snapshot_DeepCopy(t *testing.T) {
 	m := asset.NewManager(nil)
 	mac := mustMAC(t, "33:33:33:33:33:33")
 
-	m.Apply(asset.Observation{
+	m.Apply(context.Background(), asset.Observation{
 		Source:     asset.SourceARP,
 		ObservedAt: time.Now(),
 		MAC:        mac,
@@ -561,7 +562,7 @@ func TestManager_LoadSnapshots_StaleSkipped(t *testing.T) {
 	now := time.Now()
 
 	// Apply (sets LastSeen=now)
-	m.Apply(asset.Observation{
+	m.Apply(context.Background(), asset.Observation{
 		Source:     asset.SourceARP,
 		ObservedAt: now,
 		MAC:        mac,
@@ -590,7 +591,7 @@ func TestManager_Get_Existing(t *testing.T) {
 	m := asset.NewManager(nil)
 	mac := mustMAC(t, "66:66:66:66:66:66")
 
-	res, _ := m.Apply(asset.Observation{
+	res, _ := m.Apply(context.Background(), asset.Observation{
 		Source:     asset.SourceARP,
 		ObservedAt: time.Now(),
 		MAC:        mac,
@@ -629,7 +630,7 @@ func TestManager_ApplyConcurrent(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			mac := net.HardwareAddr{0x10, byte(i >> 8), byte(i), 0xAB, 0xCD, 0xEF}
-			m.Apply(asset.Observation{
+			m.Apply(context.Background(), asset.Observation{
 				Source:     asset.SourceARP,
 				ObservedAt: time.Now(),
 				MAC:        mac,

@@ -13,7 +13,9 @@ import (
 
 // fakeManager implements the lifecycle.Manager interface for testing.
 type fakeManager struct {
-	sweepCalls atomic.Int32
+	sweepCalls  atomic.Int32
+	evictCalls  atomic.Int32
+	lastEvicted atomic.Int32
 }
 
 func (f *fakeManager) Sweep(_ time.Time, _ time.Duration) []asset.Event {
@@ -21,10 +23,15 @@ func (f *fakeManager) Sweep(_ time.Time, _ time.Duration) []asset.Event {
 	return nil
 }
 
+func (f *fakeManager) EvictStale(_ time.Time, _ time.Duration) int {
+	f.evictCalls.Add(1)
+	return int(f.lastEvicted.Load())
+}
+
 func TestTracker_RunTicksAtInterval(t *testing.T) {
 	t.Parallel()
 	mgr := &fakeManager{}
-	tr := lifecycle.NewTracker(mgr, lifecycle.RealClock{}, 20*time.Millisecond, time.Hour, slog.Default())
+	tr := lifecycle.NewTracker(mgr, lifecycle.RealClock{}, 20*time.Millisecond, time.Hour, 0, slog.Default())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go tr.Run(ctx)
@@ -40,7 +47,7 @@ func TestTracker_RunTicksAtInterval(t *testing.T) {
 func TestTracker_RunStopsOnContextCancel(t *testing.T) {
 	t.Parallel()
 	mgr := &fakeManager{}
-	tr := lifecycle.NewTracker(mgr, lifecycle.RealClock{}, 10*time.Millisecond, time.Hour, slog.Default())
+	tr := lifecycle.NewTracker(mgr, lifecycle.RealClock{}, 10*time.Millisecond, time.Hour, 0, slog.Default())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -62,7 +69,7 @@ func TestTracker_RunStopsOnContextCancel(t *testing.T) {
 func TestTracker_RunReturnsNilOnCleanShutdown(t *testing.T) {
 	t.Parallel()
 	mgr := &fakeManager{}
-	tr := lifecycle.NewTracker(mgr, lifecycle.RealClock{}, 100*time.Millisecond, time.Hour, slog.Default())
+	tr := lifecycle.NewTracker(mgr, lifecycle.RealClock{}, 100*time.Millisecond, time.Hour, 0, slog.Default())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)

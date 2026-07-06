@@ -42,20 +42,28 @@ func buildDHCPv4(t *testing.T, clientMAC net.HardwareAddr, messageType layers.DH
 	}
 	dhcp.Options = append(dhcp.Options, opts...)
 	// Always append the message type option (DHCP option 53).
-	msgTypeData := []byte{byte(messageType)}
-	dhcp.Options = append(dhcp.Options, layers.DHCPOption{
-		Type: layers.DHCPOptMessageType,
-		Data: msgTypeData,
-	})
+	// Use NewDHCPOption so Length is auto-populated from Data.
+	dhcp.Options = append(dhcp.Options,
+		layers.NewDHCPOption(layers.DHCPOptMessageType, []byte{byte(messageType)}),
+	)
 
 	eth := &layers.Ethernet{
 		SrcMAC:       clientMAC,
 		DstMAC:       helpers.BroadcastMAC(),
 		EthernetType: layers.EthernetTypeIPv4,
 	}
+	ip4 := &layers.IPv4{
+		SrcIP:    helpers.IPv4(0, 0, 0, 0),
+		DstIP:    helpers.IPv4(255, 255, 255, 255),
+		Protocol: layers.IPProtocolUDP,
+	}
+	udp := &layers.UDP{
+		SrcPort: layers.UDPPort(68),
+		DstPort: layers.UDPPort(67),
+	}
 	buf := gopacket.NewSerializeBuffer()
 	_ = gopacket.SerializeLayers(buf, gopacket.SerializeOptions{FixLengths: true},
-		eth, dhcp,
+		eth, ip4, udp, dhcp,
 	)
 	return gopacket.NewPacket(buf.Bytes(), layers.LinkTypeEthernet, gopacket.Default)
 }
@@ -157,7 +165,7 @@ func TestDHCPAnalyzer_OptionHostname(t *testing.T) {
 	t.Parallel()
 	a := analyzer.NewDHCPAnalyzer()
 	opts := []layers.DHCPOption{
-		{Type:layers.DHCPOptHostname, Data: []byte("my-laptop")},
+		layers.NewDHCPOption(layers.DHCPOptHostname, []byte("my-laptop")),
 	}
 	pkt := buildDHCPv4(t, helpers.RandMAC(), layers.DHCPMsgTypeDiscover, opts)
 	obs := a.Analyze(pkt)
@@ -174,7 +182,7 @@ func TestDHCPAnalyzer_Option55_ParamRequestList(t *testing.T) {
 	t.Parallel()
 	a := analyzer.NewDHCPAnalyzer()
 	opts := []layers.DHCPOption{
-		{Type: layers.DHCPOptParamsRequest, Data: []byte{1, 3, 6, 15, 43}},
+		layers.NewDHCPOption(layers.DHCPOptParamsRequest, []byte{1, 3, 6, 15, 43}),
 	}
 	pkt := buildDHCPv4(t, helpers.RandMAC(), layers.DHCPMsgTypeDiscover, opts)
 	obs := a.Analyze(pkt)
@@ -191,7 +199,7 @@ func TestDHCPAnalyzer_Option54_ServerID(t *testing.T) {
 	t.Parallel()
 	a := analyzer.NewDHCPAnalyzer()
 	opts := []layers.DHCPOption{
-		{Type:layers.DHCPOptServerID, Data: []byte{192, 168, 1, 1}},
+		layers.NewDHCPOption(layers.DHCPOptServerID, []byte{192, 168, 1, 1}),
 	}
 	pkt := buildDHCPv4(t, helpers.RandMAC(), layers.DHCPMsgTypeAck, opts)
 	obs := a.Analyze(pkt)
@@ -209,7 +217,7 @@ func TestDHCPAnalyzer_Option6_DNS(t *testing.T) {
 	a := analyzer.NewDHCPAnalyzer()
 	// Two DNS servers: 8.8.8.8 and 8.8.4.4
 	opts := []layers.DHCPOption{
-		{Type:layers.DHCPOptDNS, Data: []byte{8, 8, 8, 8, 8, 8, 4, 4}},
+		layers.NewDHCPOption(layers.DHCPOptDNS, []byte{8, 8, 8, 8, 8, 8, 4, 4}),
 	}
 	pkt := buildDHCPv4(t, helpers.RandMAC(), layers.DHCPMsgTypeAck, opts)
 	obs := a.Analyze(pkt)
@@ -226,7 +234,7 @@ func TestDHCPAnalyzer_Option15_Domain(t *testing.T) {
 	t.Parallel()
 	a := analyzer.NewDHCPAnalyzer()
 	opts := []layers.DHCPOption{
-		{Type:layers.DHCPOptDomainName, Data: []byte("example.com")},
+		layers.NewDHCPOption(layers.DHCPOptDomainName, []byte("example.com")),
 	}
 	pkt := buildDHCPv4(t, helpers.RandMAC(), layers.DHCPMsgTypeAck, opts)
 	obs := a.Analyze(pkt)
@@ -243,7 +251,7 @@ func TestDHCPAnalyzer_Option82_RelayAgent(t *testing.T) {
 	t.Parallel()
 	a := analyzer.NewDHCPAnalyzer()
 	opts := []layers.DHCPOption{
-		{Type: layers.DHCPOpt(82), Data: []byte{0x52, 0x02, 0x00, 0x0A}},
+		layers.NewDHCPOption(layers.DHCPOpt(82), []byte{0x52, 0x02, 0x00, 0x0A}),
 	}
 	pkt := buildDHCPv4(t, helpers.RandMAC(), layers.DHCPMsgTypeDiscover, opts)
 	obs := a.Analyze(pkt)
@@ -272,9 +280,9 @@ func TestDHCPAnalyzer_LeaseDuration(t *testing.T) {
 	// Lease time = 3600 seconds (1 hour) encoded as 4 big-endian bytes
 	leaseSecs := uint32(3600)
 	opts := []layers.DHCPOption{
-		{Type:layers.DHCPOptLeaseTime, Data: []byte{
+		layers.NewDHCPOption(layers.DHCPOptLeaseTime, []byte{
 			byte(leaseSecs >> 24), byte(leaseSecs >> 16), byte(leaseSecs >> 8), byte(leaseSecs),
-		}},
+		}),
 	}
 	pkt := buildDHCPv4(t, helpers.RandMAC(), layers.DHCPMsgTypeAck, opts)
 	obs := a.Analyze(pkt)

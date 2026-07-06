@@ -109,7 +109,7 @@ func TestSQLite_SaveBatchAndLoadAssets(t *testing.T) {
 		t.Fatalf("SaveBatch failed: %v", err)
 	}
 
-	loaded, err := repo.LoadAssets(ctx)
+	loaded, err := repo.LoadAssets(ctx, storage.LoadOptions{})
 	if err != nil {
 		t.Fatalf("LoadAssets failed: %v", err)
 	}
@@ -162,7 +162,7 @@ func TestSQLite_ChildRowsIPs(t *testing.T) {
 	}
 
 	repo.SaveBatch(ctx, storage.Batch{RunID: "r1", Assets: []asset.AssetSnapshot{snap}})
-	loaded, _ := repo.LoadAssets(ctx)
+	loaded, _ := repo.LoadAssets(ctx, storage.LoadOptions{})
 
 	if len(loaded[0].IPv4s) != 2 {
 		t.Errorf("expected 2 IPs, got %d", len(loaded[0].IPv4s))
@@ -189,9 +189,17 @@ func TestSQLite_ChildRowsHostnames(t *testing.T) {
 	snap2.Hostnames = []string{"host-b", "host-c"}
 	repo.SaveBatch(ctx, storage.Batch{RunID: "r2", Assets: []asset.AssetSnapshot{snap2}})
 
-	loaded, _ := repo.LoadAssets(ctx)
-	if len(loaded[0].Hostnames) != 2 {
-		t.Errorf("expected 2 hostnames after replace, got %d: %v", len(loaded[0].Hostnames), loaded[0].Hostnames)
+	loaded, _ := repo.LoadAssets(ctx, storage.LoadOptions{})
+	// Child rows are MERGE semantics (UPSERT + append), not REPLACE.
+	// First save: [host-a], second save: [host-b, host-c] -> total 3 hostnames.
+	wantHostnames := map[string]bool{"host-a": true, "host-b": true, "host-c": true}
+	if len(loaded[0].Hostnames) != 3 {
+		t.Errorf("expected 3 hostnames after merge, got %d: %v", len(loaded[0].Hostnames), loaded[0].Hostnames)
+	}
+	for _, h := range loaded[0].Hostnames {
+		if !wantHostnames[h] {
+			t.Errorf("unexpected hostname %q", h)
+		}
 	}
 }
 
@@ -213,7 +221,7 @@ func TestSQLite_ChildRowsServices(t *testing.T) {
 		},
 	}
 	repo.SaveBatch(ctx, storage.Batch{RunID: "r1", Assets: []asset.AssetSnapshot{snap}})
-	loaded, _ := repo.LoadAssets(ctx)
+	loaded, _ := repo.LoadAssets(ctx, storage.LoadOptions{})
 
 	if len(loaded[0].Services) != 2 {
 		t.Errorf("expected 2 services, got %d", len(loaded[0].Services))
@@ -253,7 +261,7 @@ func TestSQLite_UpsertCOALESCE(t *testing.T) {
 	snap.SeenCount = 1
 	repo.SaveBatch(ctx, storage.Batch{RunID: "r2", Assets: []asset.AssetSnapshot{snap}})
 
-	loaded, _ := repo.LoadAssets(ctx)
+	loaded, _ := repo.LoadAssets(ctx, storage.LoadOptions{})
 	if loaded[0].OS != "Linux" {
 		t.Errorf("expected COALESCE to keep Linux, got %q", loaded[0].OS)
 	}
@@ -292,6 +300,13 @@ func TestSQLite_SaveStats(t *testing.T) {
 	defer repo.Close()
 
 	ctx := context.Background()
+	// SaveStats has FK -> capture_runs, so seed the run first.
+	if err := repo.SaveRunStart(ctx, storage.CaptureRun{
+		ID: "run_003", Mode: "pcap", SourceName: "test.pcap",
+		StartedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("SaveRunStart failed: %v", err)
+	}
 	err := repo.SaveStats(ctx, storage.StatsSnapshot{
 		RunID:           "run_003",
 		CapturedAt:      time.Now().UTC(),

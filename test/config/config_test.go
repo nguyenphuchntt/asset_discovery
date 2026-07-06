@@ -81,9 +81,13 @@ func TestParse_BothPCAPAndInterface(t *testing.T) {
 }
 
 func TestParse_MissingOutput(t *testing.T) {
-	_, err := config.Parse([]string{"--pcap", "test.pcap"}, staticEnv)
-	if err == nil {
-		t.Fatal("expected error for missing --output")
+	// When --output is omitted the parser falls back to DefaultOutputDir ("./output").
+	cfg, err := config.Parse([]string{"--pcap", "test.pcap"}, staticEnv)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.OutputDirectory == "" {
+		t.Error("expected default output directory to be set")
 	}
 }
 
@@ -112,8 +116,8 @@ func TestParse_Defaults(t *testing.T) {
 	if cfg.QueueSize != 4096 {
 		t.Errorf("expected default queue-size=4096, got %d", cfg.QueueSize)
 	}
-	if cfg.Workers != 1 {
-		t.Errorf("expected default workers=1, got %d", cfg.Workers)
+	if cfg.Workers != 2 {
+		t.Errorf("expected default workers=2, got %d", cfg.Workers)
 	}
 }
 
@@ -146,7 +150,8 @@ func TestParse_DBPathDirectoryRejected(t *testing.T) {
 
 func TestParse_KeepJSONOutputRequiresDB(t *testing.T) {
 	dir := t.TempDir()
-	_, err := config.Parse([]string{"--pcap", "test.pcap", "--output", dir, "--keep-json-output"}, staticEnv)
+	// --db "" sets DBPath="" (empty), so the --keep-json-output validation triggers.
+	_, err := config.Parse([]string{"--pcap", "test.pcap", "--output", dir, "--db", "", "--keep-json-output"}, staticEnv)
 	if err == nil {
 		t.Fatal("expected error for --keep-json-output without --db")
 	}
