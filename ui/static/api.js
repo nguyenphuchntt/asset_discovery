@@ -290,6 +290,14 @@ export async function fetchEvents({ assetId, after, limit = 100, signal } = {}) 
   return realFetch(`/events?${params}`, { signal });
 }
 
+export async function fetchVendors({ signal } = {}) {
+  if (state.useMock) {
+    await mockDelay();
+    return { vendors: [...new Set(mockAssets.map(a => a.vendor).filter(Boolean))].sort() };
+  }
+  return realFetch("/vendors", { signal });
+}
+
 // Quick probe to see if the real API is reachable.
 export async function probeRealAPI() {
   try {

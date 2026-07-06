@@ -6,7 +6,7 @@
 import { state, resetFilters } from "./state.js";
 import {
   fetchUIConfig, fetchStats, fetchAssets,
-  fetchAssetDetail, fetchEvents, probeRealAPI,
+  fetchAssetDetail, fetchEvents, fetchVendors, probeRealAPI,
 } from "./api.js";
 import {
   formatRelativeTime, formatClockTime,
@@ -407,12 +407,11 @@ async function runPoll() {
 }
 
 async function bootPoll() {
-  // Detect real API or fall back to mock.
-  if (!state.useMock) {
+  // Auto-detect: probe for the real API; switch off mock if reachable.
+  if (state.useMock) {
     const reachable = await probeRealAPI();
-    if (!reachable) {
-      state.useMock = true;
-      showToast("real API unreachable, using mock data");
+    if (reachable) {
+      state.useMock = false;
     }
   }
 
@@ -518,9 +517,8 @@ function bindEvents() {
 
   document.addEventListener("visibilitychange", handleVisibilityChange);
 
-  // Populate vendor dropdown with unique vendors from mock data.
-  // In real mode this would come from the backend or a dedicated endpoint.
-  if (state.useMock) populateVendorFilter();
+  // Populate vendor dropdown (fetchVendors works for both mock and live)
+  populateVendorFilter();
 }
 
 async function refreshData() {
@@ -543,12 +541,16 @@ async function refreshData() {
   }
 }
 
-function populateVendorFilter() {
-  const vendors = new Set(state.assets.map(a => a.vendor).filter(Boolean));
-  const sorted = [...vendors].sort();
-  dom.vendorFilter.innerHTML =
-    '<option value="">All vendors</option>' +
-    sorted.map(v => `<option value="${escapeHTML(v)}">${escapeHTML(v)}</option>`).join("");
+async function populateVendorFilter() {
+  try {
+    const res = await fetchVendors();
+    const vendors = res.vendors || [];
+    dom.vendorFilter.innerHTML =
+      '<option value="">All vendors</option>' +
+      vendors.map(v => `<option value="${escapeHTML(v)}">${escapeHTML(v)}</option>`).join("");
+  } catch {
+    // If vendors fetch fails, just keep the current list.
+  }
 }
 
 // ---------------------------------------------------------------------------

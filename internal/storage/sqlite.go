@@ -66,6 +66,11 @@ func (r *SQLiteRepo) Close() error {
 	return r.db.Close()
 }
 
+// DB returns the underlying *sql.DB, allowing ad-hoc queries from the API layer.
+func (r *SQLiteRepo) DB() *sql.DB {
+	return r.db
+}
+
 // save batch
 func (r *SQLiteRepo) SaveBatch(ctx context.Context, batch Batch) error {
 	if len(batch.Assets) == 0 && len(batch.Events) == 0 { // nothing 

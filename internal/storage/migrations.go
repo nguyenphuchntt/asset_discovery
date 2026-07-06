@@ -6,6 +6,7 @@ import (
 	_ "embed"
 )
 
+//go:embed schema.sql
 var schemaSQL string
 func initSchema(ctx context.Context, db *sql.DB) error {
 	if _, err := db.ExecContext(ctx, schemaSQL); err != nil {

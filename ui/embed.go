@@ -4,5 +4,11 @@ package ui
 
 import "embed"
 
+// FS is an alias for embed.FS to make the embed.FS type wrappable in function
+// signatures from other packages without importing embed directly.
+type FS = embed.FS
+
 //go:embed static/*
+
+// Static is the FS containing dashboard assets.
 var Static embed.FS
