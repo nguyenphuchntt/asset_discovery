@@ -9,7 +9,6 @@ import (
 // StatsSnapshot holds the runtime counters for the dashboard.
 type StatsSnapshot struct {
 	PacketsReceived uint64
-	Observations    uint64
 	AssetsCreated   uint64
 	AssetsUpdated   uint64
 	KernelDropped   uint64

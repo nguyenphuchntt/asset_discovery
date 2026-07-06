@@ -4,7 +4,6 @@ type StatsResponse struct {
 	Time            string `json:"time"`
 	UptimeSeconds   int64  `json:"uptime_seconds"`
 	PacketsReceived uint64 `json:"packets_received"`
-	Observations    uint64 `json:"observations"`
 	AssetsTotal     int    `json:"assets_total"`
 	AssetsOnline    int    `json:"assets_online"`
 	AssetsOffline   int    `json:"assets_offline"`
@@ -26,7 +25,6 @@ type AssetListItem struct {
 	DeviceType string   `json:"device_type"`
 	Model      string   `json:"model"`
 	OS         string   `json:"os"`
-	Sources    []string `json:"sources"`
 	FirstSeen  string   `json:"first_seen"`
 	LastSeen   string   `json:"last_seen"`
 	SeenCount  uint64   `json:"seen_count"`
@@ -86,6 +84,7 @@ type AssetDetailResponse struct {
 	Hostnames    []string         `json:"hostnames"`
 	Services     []ServiceEntry   `json:"services"`
 	RecentEvents []EventEntry     `json:"recent_events"`
+	Extras       map[string]any   `json:"extras"`
 }
 
 type EventListResponse struct {

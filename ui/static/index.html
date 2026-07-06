@@ -20,23 +20,14 @@
   <section id="statsBar" class="stats" aria-label="Runtime statistics"></section>
 
   <section class="filters" aria-label="Filters">
-    <input id="qFilter" type="search" placeholder="Search MAC / IP / hostname / vendor" autocomplete="off" />
+    <input id="qFilter" type="search" placeholder="Search MAC / IP / hostname / MAC vendor" autocomplete="off" />
     <select id="statusFilter">
-      <option value="">All status</option>
+      <option value="">All statuses</option>
       <option value="online">online</option>
       <option value="offline">offline</option>
     </select>
     <select id="vendorFilter">
-      <option value="">All vendors</option>
-    </select>
-    <select id="sourceFilter">
-      <option value="">All sources</option>
-      <option value="arp">arp</option>
-      <option value="dhcpv4">dhcpv4</option>
-      <option value="dhcpv6">dhcpv6</option>
-      <option value="mdns">mdns</option>
-      <option value="ssdp">ssdp</option>
-      <option value="ethernet">ethernet</option>
+      <option value="">All MAC vendors</option>
     </select>
     <button id="resetFilters" type="button">Reset</button>
   </section>
@@ -51,16 +42,15 @@
         <table id="assetTable">
           <thead>
             <tr>
-              <th>status</th>
-              <th>current IP</th>
+              <th>Status</th>
+              <th>IP</th>
               <th>MAC</th>
-              <th>hostname</th>
-              <th>vendor</th>
-              <th>device type</th>
+              <th>Hostname</th>
+              <th>MAC Vendor</th>
+              <th>Device</th>
               <th>OS</th>
-              <th>sources</th>
-              <th>last seen</th>
-              <th>seen</th>
+              <th>Last Seen</th>
+              <th>Seen</th>
             </tr>
           </thead>
           <tbody id="assetTbody"></tbody>

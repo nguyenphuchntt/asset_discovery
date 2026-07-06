@@ -17,7 +17,6 @@ export const state = {
     q: "",
     status: "",
     vendor: "",
-    source: "",
   },
 
   page: {
@@ -45,6 +44,6 @@ export const state = {
 };
 
 export function resetFilters() {
-  state.filters = { q: "", status: "", vendor: "", source: "" };
+  state.filters = { q: "", status: "", vendor: "" };
   state.page.cursor = "";
 }

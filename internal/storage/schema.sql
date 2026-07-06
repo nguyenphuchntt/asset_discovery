@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS asset_ips (
     is_active INTEGER NOT NULL DEFAULT 1,
     updated_at TEXT NOT NULL,
     PRIMARY KEY (asset_id, ip),
-    FOREIGN KEY (asset_id) REFERENCES assets(id)
+    FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS asset_hostnames (
@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS asset_hostnames (
     last_seen TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     PRIMARY KEY (asset_id, hostname),
-    FOREIGN KEY (asset_id) REFERENCES assets(id)
+    FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS asset_services (
@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS asset_services (
     last_seen TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     PRIMARY KEY (asset_id, protocol, port),
-    FOREIGN KEY (asset_id) REFERENCES assets(id)
+    FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS asset_events (
@@ -68,7 +68,7 @@ CREATE TABLE IF NOT EXISTS asset_events (
     source TEXT NOT NULL,
     detail TEXT,
     inserted_at TEXT NOT NULL,
-    FOREIGN KEY (asset_id) REFERENCES assets(id)
+    FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE
 );
 
 -- Capture run bookkeeping -------------------------------------------------------

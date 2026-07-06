@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -23,7 +24,6 @@ type AssetFilter struct {
 	Q          string
 	Status     string
 	Vendor     string
-	Source     string
 	IP         string
 	MAC        string
 	Hostname   string
@@ -215,17 +215,18 @@ func (q *DBQueryRepo) loadHostnames(ctx context.Context, assetID string) ([]stri
 // --- GetAssetDetail ---
 
 func (q *DBQueryRepo) GetAssetDetail(ctx context.Context, id asset.AssetID) (*AssetDetailResponse, error) {
-	const assetQ = `SELECT id, status, mac, mac_vendor, device_type, model, os, first_seen, last_seen
+	const assetQ = `SELECT id, status, mac, mac_vendor, device_type, model, os, extra_json, first_seen, last_seen
 		FROM assets WHERE id = ?`
 
 	var (
-		resp   AssetDetailResponse
-		macStr sql.NullString
+		resp      AssetDetailResponse
+		macStr    sql.NullString
+		extraJSON sql.NullString
 	)
 	resp.Asset = AssetIdentity{}
 	err := q.db.QueryRowContext(ctx, assetQ, string(id)).Scan(
 		&resp.Asset.ID, &resp.Asset.Status, &macStr, &resp.Asset.Vendor,
-		&resp.Asset.DeviceType, &resp.Asset.Model, &resp.Asset.OS,
+		&resp.Asset.DeviceType, &resp.Asset.Model, &resp.Asset.OS, &extraJSON,
 		&resp.Asset.FirstSeen, &resp.Asset.LastSeen,
 	)
 	if err == sql.ErrNoRows {
@@ -236,6 +237,9 @@ func (q *DBQueryRepo) GetAssetDetail(ctx context.Context, id asset.AssetID) (*As
 	}
 	if macStr.Valid {
 		resp.Asset.MAC = macStr.String
+	}
+	if extraJSON.Valid && extraJSON.String != "" {
+		_ = json.Unmarshal([]byte(extraJSON.String), &resp.Extras)
 	}
 
 	resp.IPv4History, _ = q.loadIPHistory(ctx, string(id), 4)

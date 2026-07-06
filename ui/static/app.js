@@ -30,7 +30,6 @@ function cacheDOM() {
   dom.qFilter       = $("#qFilter");
   dom.statusFilter  = $("#statusFilter");
   dom.vendorFilter  = $("#vendorFilter");
-  dom.sourceFilter  = $("#sourceFilter");
   dom.resetFilters  = $("#resetFilters");
   dom.assetTbody    = $("#assetTbody");
   dom.assetEmpty    = $("#assetEmpty");
@@ -60,7 +59,6 @@ function renderStats(s) {
     { label: "online",       value: formatNumber(s.assets_online), cls: "" },
     { label: "offline",      value: formatNumber(s.assets_offline), cls: s.assets_offline > 0 ? "" : "" },
     { label: "packets recv", value: formatNumber(s.packets_received), cls: "" },
-    { label: "observations", value: formatNumber(s.observations), cls: "" },
     { label: "int dropped",  value: formatNumber(s.internal_dropped), cls: s.internal_dropped > 0 ? "warn" : "" },
     { label: "kernel drop",  value: formatNumber(s.kernel_dropped), cls: s.kernel_dropped > 0 ? "danger" : "" },
     { label: "db flush err", value: formatNumber(s.db_flush_errors), cls: s.db_flush_errors > 0 ? "warn" : "" },
@@ -95,14 +93,13 @@ function renderAssetRows(items) {
 
   dom.assetTbody.innerHTML = items.map(a => `
     <tr data-id="${escapeHTML(a.id)}">
-      <td><span class="status-dot ${escapeHTML(a.status)}"></span>${escapeHTML(a.status)}</td>
+      <td class="status-cell"><span class="status-dot ${escapeHTML(a.status)}"></span>${escapeHTML(a.status || "-")}</td>
       <td class="ip-cell">${(a.current_ips || []).map(escapeHTML).join(", ")}</td>
       <td class="mac-cell">${escapeHTML(a.mac)}</td>
-      <td>${(a.hostnames || []).map(escapeHTML).join(", ")}</td>
-      <td>${escapeHTML(a.vendor)}</td>
-      <td>${escapeHTML(a.device_type)}</td>
-      <td>${escapeHTML(a.os)}</td>
-      <td>${(a.sources || []).map(s => `<span class="chip">${escapeHTML(s)}</span>`).join("")}</td>
+      <td class="hostname-cell">${(a.hostnames || []).map(escapeHTML).join(", ") || "-"}</td>
+      <td class="vendor-cell">${escapeHTML(a.vendor || "-")}</td>
+      <td class="device-cell">${escapeHTML(a.device_type || "-")}</td>
+      <td class="os-cell">${escapeHTML(a.os || "-")}</td>
       <td title="${formatClockTime(a.last_seen)}">${formatRelativeTime(a.last_seen)}</td>
       <td>${formatNumber(a.seen_count)}</td>
     </tr>
@@ -175,8 +172,8 @@ function renderDrawerDetail(d) {
       <dl>
         <dt>Status</dt><dd><span class="status-dot ${escapeHTML(a.status)}"></span>${escapeHTML(a.status)}</dd>
         <dt>MAC</dt><dd>${escapeHTML(a.mac)}</dd>
-        <dt>Vendor</dt><dd>${escapeHTML(a.vendor)}</dd>
-        <dt>Device type</dt><dd>${escapeHTML(a.device_type)}</dd>
+        <dt>MAC Vendor</dt><dd>${escapeHTML(a.vendor)}</dd>
+        <dt>Device</dt><dd>${escapeHTML(a.device_type)}</dd>
         <dt>Model</dt><dd>${escapeHTML(a.model || "—")}</dd>
         <dt>OS</dt><dd>${escapeHTML(a.os || "—")}</dd>
         <dt>OS version</dt><dd>${escapeHTML(a.os_version || "—")}</dd>
@@ -196,6 +193,7 @@ function renderDrawerDetail(d) {
     ${renderHostnamesSection(d.hostnames)}
     ${renderServicesSection(d.services)}
     ${renderRecentEventsSection(d.recent_events)}
+    ${renderExtrasSection(d.extras)}
   `;
 }
 
@@ -273,6 +271,29 @@ function renderRecentEventsSection(events) {
       </ul>
     </div>
   `;
+}
+
+function renderExtrasSection(extras) {
+  const entries = extras ? Object.entries(extras) : [];
+  if (!entries.length) return "";
+  const rows = entries
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([k, v]) => `
+      <dt>${escapeHTML(k)}</dt>
+      <dd><pre class="extra-value">${escapeHTML(formatExtraValue(v))}</pre></dd>
+    `).join("");
+  return `
+    <div class="drawer-section">
+      <h4>Extras</h4>
+      <dl>${rows}</dl>
+    </div>
+  `;
+}
+
+function formatExtraValue(v) {
+  if (v === null || v === undefined) return "";
+  if (typeof v === "string") return v;
+  return JSON.stringify(v, null, 2);
 }
 
 function closeDrawer() {
@@ -467,17 +488,11 @@ function bindEvents() {
     applyFiltersAndResetPage();
   });
 
-  dom.sourceFilter.addEventListener("change", () => {
-    state.filters.source = dom.sourceFilter.value;
-    applyFiltersAndResetPage();
-  });
-
   dom.resetFilters.addEventListener("click", () => {
     resetFilters();
     dom.qFilter.value = "";
     dom.statusFilter.value = "";
     dom.vendorFilter.value = "";
-    dom.sourceFilter.value = "";
     applyFiltersAndResetPage();
   });
 
@@ -517,7 +532,7 @@ function bindEvents() {
 
   document.addEventListener("visibilitychange", handleVisibilityChange);
 
-  // Populate vendor dropdown (fetchVendors works for both mock and live)
+  // Populate MAC vendor dropdown (fetchVendors works for both mock and live)
   populateVendorFilter();
 }
 
@@ -546,7 +561,7 @@ async function populateVendorFilter() {
     const res = await fetchVendors();
     const vendors = res.vendors || [];
     dom.vendorFilter.innerHTML =
-      '<option value="">All vendors</option>' +
+      '<option value="">All MAC vendors</option>' +
       vendors.map(v => `<option value="${escapeHTML(v)}">${escapeHTML(v)}</option>`).join("");
   } catch {
     // If vendors fetch fails, just keep the current list.

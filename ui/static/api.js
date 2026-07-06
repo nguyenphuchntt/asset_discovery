@@ -33,7 +33,6 @@ const MOCK_STATS = {
   time: new Date().toISOString(),
   uptime_seconds: 1847,
   packets_received: 23814,
-  observations: 11205,
   assets_total: 42,
   assets_online: 31,
   assets_offline: 11,
@@ -85,7 +84,6 @@ function generateMockAssets(count) {
     const mac = rndMAC(i);
     const ips = Array.from({ length: 1 + Math.floor(Math.random() * 2) }, () => rndIP());
     const hosts = [rndHostname()];
-    const sources = [rnd(SOURCES_LIST), rnd(SOURCES_LIST)].filter((v, idx, a) => a.indexOf(v) === idx);
     const lastMinsAgo = isOnline ? Math.floor(Math.random() * 30) : 60 + Math.floor(Math.random() * 1440);
     const services = generateMockServices(isOnline);
 
@@ -99,7 +97,6 @@ function generateMockAssets(count) {
       device_type: rnd(DEV_TYPES),
       model: isOnline ? "" : "",
       os: rnd(OS_LIST),
-      sources,
       first_seen: mockHoursAgo(3 + Math.random() * 72),
       last_seen: mockMinutesAgo(lastMinsAgo),
       seen_count: 10 + Math.floor(Math.random() * 500),
@@ -217,7 +214,6 @@ export async function fetchAssets({ page, filters, signal } = {}) {
     }
     if (filters.status) items = items.filter(a => a.status === filters.status);
     if (filters.vendor) items = items.filter(a => a.vendor === filters.vendor);
-    if (filters.source) items = items.filter(a => a.sources.includes(filters.source));
 
     const start = parseInt(cursor, 10) || 0;
     const pageItems = items.slice(start, start + limit);
@@ -227,7 +223,6 @@ export async function fetchAssets({ page, filters, signal } = {}) {
         id: a.id, status: a.status, mac: a.mac,
         current_ips: a.current_ips, hostnames: a.hostnames,
         vendor: a.vendor, device_type: a.device_type, os: a.os,
-        sources: a.sources,
         first_seen: a.first_seen, last_seen: a.last_seen,
         seen_count: a.seen_count,
       })),
@@ -244,7 +239,6 @@ export async function fetchAssets({ page, filters, signal } = {}) {
   if (filters.q) params.set("q", filters.q);
   if (filters.status) params.set("status", filters.status);
   if (filters.vendor) params.set("vendor", filters.vendor);
-  if (filters.source) params.set("source", filters.source);
   return realFetch(`/assets?${params}`, { signal });
 }
 
