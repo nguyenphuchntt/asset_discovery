@@ -1,6 +1,7 @@
 package asset
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"slices"
@@ -14,11 +15,16 @@ type VendorResolver interface {
 	VendorForMAC(mac string) (string, bool)
 }
 
+type Hydrator interface {
+	LoadAssetByMAC(ctx context.Context, mac string) (*AssetSnapshot, error)
+}
+
 type AssetManager interface {
-	Apply(obs Observation) (ApplyResult, error)
+	Apply(ctx context.Context, obs Observation) (ApplyResult, error)
 	Get(id AssetID) (AssetSnapshot, bool)
 	Snapshot() []AssetSnapshot
 	Sweep(now time.Time, offlineAfter time.Duration) []Event
+	EvictStale(now time.Time, evictAfter time.Duration) int
 	DrainDirty() []AssetSnapshot
 	DrainEvents() []Event
 }
@@ -49,6 +55,7 @@ type Manager struct {
 	shards   [ShardCount]*shard
 	resolver *ShardedResolver
 	vendor   VendorResolver
+	hydrator Hydrator
 }
 
 type ShardedResolver struct {
@@ -101,6 +108,21 @@ func (r *ShardedResolver) Bind(id AssetID, mac net.HardwareAddr, idx int) {
 	r.shards[idx].byID[id] = k
 }
 
+// Unbind removes the MAC↔ID binding. Used during eviction.
+func (r *ShardedResolver) Unbind(id AssetID, idx int) {
+	if idx < 0 || idx >= ShardCount {
+		return
+	}
+	r.shards[idx].Lock()
+	defer r.shards[idx].Unlock()
+	if k, ok := r.shards[idx].byID[id]; ok {
+		if r.shards[idx].byKey[k] == id {
+			delete(r.shards[idx].byKey, k)
+		}
+		delete(r.shards[idx].byID, id)
+	}
+}
+
 var _ AssetManager = (*Manager)(nil)
 
 type ManagerOption func(*Manager)
@@ -125,6 +147,8 @@ func NewManager(_ IdentityResolver, opts ...ManagerOption) *Manager {
 	return m
 }
 
+func (m *Manager) SetHydrator(h Hydrator) { m.hydrator = h }
+
 func (m *Manager) shardForIdx(idx int) *shard { return m.shards[idx] }
 
 func (m *Manager) mergeInto(a *Asset, obs Observation) MergeResult {
@@ -142,25 +166,36 @@ func (m *Manager) mergeInto(a *Asset, obs Observation) MergeResult {
 	return mr
 }
 
-func (m *Manager) Apply(obs Observation) (ApplyResult, error) {
+func (m *Manager) Apply(ctx context.Context, obs Observation) (ApplyResult, error) {
 	if !obs.Valid() {
 		return ApplyResult{}, nil
 	}
-
-	// Phase 1: Resolve identity (RLock trên 1 shard — không lock toàn manager)
+	// Resolve identity — lock-free read to find the shard.
 	existingID, idx, exists := m.resolver.Resolve(obs.MAC)
 
-	// Phase 2: Lock shard, thực hiện merge + emit + dirty.
+	// Lock shard.
 	sh := m.shardForIdx(idx)
 	sh.mu.Lock()
 	defer sh.mu.Unlock()
+
+	// On-demand hydrate: MAC exists in DB but not in memory (evicted or cold).
+	if !exists && m.hydrator != nil {
+		if snap, _ := m.hydrator.LoadAssetByMAC(ctx, obs.MAC.String()); snap != nil {
+			a := assetFromSnapshot(*snap)
+			sh.assets[a.ID] = a
+			m.resolver.Bind(a.ID, a.MAC, idx)
+			existingID = a.ID
+			exists = true
+		}
+	}
 
 	emit := func(t EventType, id AssetID, detail string) {
 		sh.events = append(sh.events, newEvent(t, id, obs.ObservedAt, obs.Source, ""))
 	}
 
 	var res ApplyResult
-	if exists {
+	switch {
+	case exists:
 		a := sh.assets[existingID]
 		mr := m.mergeInto(a, obs)
 		m.resolver.Bind(a.ID, obs.MAC, idx)
@@ -175,7 +210,7 @@ func (m *Manager) Apply(obs Observation) (ApplyResult, error) {
 		}
 		res.AssetID = a.ID
 		res.Action = ActionUpdated
-	} else {
+	default:
 		id := GenerateAssetID(obs.MAC)
 		if id == "" {
 			return ApplyResult{}, nil
@@ -261,6 +296,25 @@ func sweepIPMap(m *map[string]IPEntry, now time.Time) bool {
 		}
 	}
 	return changed
+}
+
+// EvictStale removes assets that are offline and have not been seen for longer
+// than evictAfter. Only the in-memory state is cleared; the DB record persists.
+func (m *Manager) EvictStale(now time.Time, evictAfter time.Duration) int {
+	evicted := 0
+	for idx := range m.shards {
+		sh := m.shards[idx]
+		sh.mu.Lock()
+		for id, a := range sh.assets {
+			if a.Status == StatusOffline && now.Sub(a.LastSeen) > evictAfter {
+				delete(sh.assets, id)
+				m.resolver.Unbind(a.ID, idx)
+				evicted++
+			}
+		}
+		sh.mu.Unlock()
+	}
+	return evicted
 }
 
 func (m *Manager) DrainDirty() []AssetSnapshot {

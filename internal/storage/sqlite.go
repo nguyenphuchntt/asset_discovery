@@ -2,14 +2,15 @@ package storage
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"time"
 
-	"github.com/google/uuid"
 	_ "modernc.org/sqlite"
 
 	"passivediscovery/internal/asset"
@@ -156,12 +157,24 @@ func (r *SQLiteRepo) SaveStats(ctx context.Context, snap StatsSnapshot) error {
 	return nil
 }
 
-// load assets from db
-func (r *SQLiteRepo) LoadAssets(ctx context.Context) ([]asset.AssetSnapshot, error) {
-	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, status, mac, mac_vendor, device_type, model, os, extra_json,
-		        first_seen, last_seen, seen_count
-		 FROM assets ORDER BY first_seen`)
+// load assets bounded by Since (recency window) + Limit (hard cap).
+// Returns at most min(N within window, Limit) snapshots, ordered by last_seen DESC.
+func (r *SQLiteRepo) LoadAssets(ctx context.Context, opts LoadOptions) ([]asset.AssetSnapshot, error) {
+	args := []any{}
+	q := `SELECT id, status, mac, mac_vendor, device_type, model, os, extra_json,
+	             first_seen, last_seen, seen_count
+	      FROM assets`
+	if !opts.Since.IsZero() {
+		q += ` WHERE last_seen >= ?`
+		args = append(args, timeFmt(opts.Since))
+	}
+	q += ` ORDER BY last_seen DESC`
+	if opts.Limit > 0 {
+		q += ` LIMIT ?`
+		args = append(args, opts.Limit)
+	}
+
+	rows, err := r.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("storage: load assets: %w", err)
 	}
@@ -195,20 +208,64 @@ func (r *SQLiteRepo) LoadAssets(ctx context.Context) ([]asset.AssetSnapshot, err
 	}
 	for i := range snapshots {
 		id := string(snapshots[i].ID)
-		snapshots[i].IPv4s, snapshots[i].IPv6s, err = loadIPs(ctx, r.db, id)
-		if err != nil {
+		var err error
+		if snapshots[i].IPv4s, snapshots[i].IPv6s, err = loadIPs(ctx, r.db, id); err != nil {
 			return nil, err
 		}
-		snapshots[i].Hostnames, err = loadHostnames(ctx, r.db, id)
-		if err != nil {
+		if snapshots[i].Hostnames, err = loadHostnames(ctx, r.db, id); err != nil {
 			return nil, err
 		}
-		snapshots[i].Services, err = loadServices(ctx, r.db, id)
-		if err != nil {
+		if snapshots[i].Services, err = loadServices(ctx, r.db, id); err != nil {
 			return nil, err
 		}
 	}
 	return snapshots, nil
+}
+
+// LoadAssetByMAC fetches one asset by MAC. Returns (nil, nil) when not found.
+func (r *SQLiteRepo) LoadAssetByMAC(ctx context.Context, macStr string) (*asset.AssetSnapshot, error) {
+	if macStr == "" {
+		return nil, nil
+	}
+	const q = `SELECT id, status, mac, mac_vendor, device_type, model, os, extra_json,
+	             first_seen, last_seen, seen_count
+	      FROM assets WHERE mac = ? LIMIT 1`
+	var (
+		s         asset.AssetSnapshot
+		macCol    sql.NullString
+		extraJSON sql.NullString
+		seenCount uint64
+	)
+	err := r.db.QueryRowContext(ctx, q, macStr).Scan(
+		&s.ID, &s.Status, &macCol, &s.MACVendor, &s.DeviceType, &s.Model,
+		&s.OS, &extraJSON,
+		&s.FirstSeen, &s.LastSeen, &seenCount,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("storage: load asset by MAC %q: %w", macStr, err)
+	}
+	s.SeenCount = seenCount
+	if macCol.Valid {
+		s.MAC, _ = net.ParseMAC(macCol.String)
+	}
+	if extraJSON.Valid {
+		_ = json.Unmarshal([]byte(extraJSON.String), &s.Extra)
+	}
+	id := string(s.ID)
+	var err2 error
+	if s.IPv4s, s.IPv6s, err2 = loadIPs(ctx, r.db, id); err2 != nil {
+		return nil, err2
+	}
+	if s.Hostnames, err2 = loadHostnames(ctx, r.db, id); err2 != nil {
+		return nil, err2
+	}
+	if s.Services, err2 = loadServices(ctx, r.db, id); err2 != nil {
+		return nil, err2
+	}
+	return &s, nil
 }
 
 func upsertAsset(ctx context.Context, tx *sql.Tx, s asset.AssetSnapshot) error {
@@ -340,8 +397,8 @@ func insertIPRow(ctx context.Context, tx *sql.Tx, assetID, ip string, ver int, e
 }
 
 func insertEvent(ctx context.Context, tx *sql.Tx, ev asset.Event, runID string) error {
-	evID := generateEventID()
-	const q = `INSERT INTO asset_events
+	evID := generateEventID(ev, runID)
+	const q = `INSERT OR IGNORE INTO asset_events
 		(id, run_id, asset_id, type, at, source, detail, inserted_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 	_, err := tx.ExecContext(ctx, q,
@@ -356,9 +413,17 @@ func insertEvent(ctx context.Context, tx *sql.Tx, ev asset.Event, runID string) 
 }
 
 
-// generate eventID by using sha256 encoding to encode event
-func generateEventID() string {
-	return uuid.New().String()
+// generateEventID produces a deterministic SHA256-based ID from the event fields.
+// Duplicate events with identical fields produce the same ID, enabling INSERT OR IGNORE dedup.
+func generateEventID(ev asset.Event, runID string) string {
+	h := sha256.New()
+	h.Write([]byte(string(ev.AssetID)))
+	h.Write([]byte(ev.Type))
+	h.Write([]byte(ev.At.UTC().Format(time.RFC3339Nano)))
+	h.Write([]byte(ev.Source))
+	h.Write([]byte(ev.Detail))
+	h.Write([]byte(runID))
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // loaders 

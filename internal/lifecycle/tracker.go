@@ -10,6 +10,7 @@ import (
 
 type Manager interface {
 	Sweep(now time.Time, offlineAfter time.Duration) []asset.Event
+	EvictStale(now time.Time, evictAfter time.Duration) int
 }
 
 type Tracker struct {
@@ -17,10 +18,11 @@ type Tracker struct {
 	clock        Clock
 	interval     time.Duration
 	offlineAfter time.Duration
+	evictAfter   time.Duration
 	logger       *slog.Logger
 }
 
-func NewTracker(mgr Manager, clock Clock, interval, offlineAfter time.Duration, logger *slog.Logger) *Tracker {
+func NewTracker(mgr Manager, clock Clock, interval, offlineAfter, evictAfter time.Duration, logger *slog.Logger) *Tracker {
 	if clock == nil {
 		clock = RealClock{}
 	}
@@ -32,6 +34,7 @@ func NewTracker(mgr Manager, clock Clock, interval, offlineAfter time.Duration, 
 		clock:        clock,
 		interval:     interval,
 		offlineAfter: offlineAfter,
+		evictAfter:   evictAfter,
 		logger:       logger.With(slog.String("component", "lifecycle")),
 	}
 }
@@ -43,6 +46,7 @@ func (t *Tracker) Run(ctx context.Context) error {
 	t.logger.Info("lifecycle tracker started",
 		slog.Duration("interval", t.interval),
 		slog.Duration("offline_after", t.offlineAfter),
+		slog.Duration("evict_after", t.evictAfter),
 	)
 
 	for {
@@ -55,6 +59,12 @@ func (t *Tracker) Run(ctx context.Context) error {
 			if n := len(events); n > 0 {
 				t.logger.Info("lifecycle sweep transitioned assets",
 					slog.Int("count", n),
+					slog.Time("now", now),
+				)
+			}
+			if evicted := t.manager.EvictStale(now, t.evictAfter); evicted > 0 {
+				t.logger.Info("evicted stale assets",
+					slog.Int("count", evicted),
 					slog.Time("now", now),
 				)
 			}

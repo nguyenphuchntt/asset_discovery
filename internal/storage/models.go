@@ -41,3 +41,8 @@ type StatsSnapshot struct {
 	DBFlushErrors     uint64
 	DBFlushLast       time.Duration
 }
+
+type LoadOptions struct {
+	Since time.Time // only assets with last_seen >= Since; zero = no time filter
+	Limit int       // hard cap on rows returned; 0 = unlimited
+}

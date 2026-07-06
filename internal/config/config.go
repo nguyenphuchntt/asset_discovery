@@ -25,6 +25,8 @@ const (
 	DefaultWorkers      = 1
 	DefaultFlushEvery   = 5 * time.Second
 	DefaultBatchSize    = 500
+	DefaultLoadLimit    = 1000
+	DefaultLoadWindow   = 24 * time.Hour
 )
 
 const (
@@ -59,6 +61,10 @@ type Config struct {
 	DBWAL         bool
 	DBBusyTimeout time.Duration
 	KeepJSONOutput bool
+
+	LoadLimit  int           // max assets loaded at startup (0 = unlimited, default 1000)
+	LoadWindow time.Duration // only load assets seen within this window (default 24h)
+	EvictAfter time.Duration // evict offline assets after this; 0 = 7×LoadWindow
 }
 
 func firstNonEmpty(value, fallback string) string {
@@ -142,6 +148,34 @@ func applyEnvDefaults(cfg *Config, getenv func(string) string) error {
 		cfg.BatchSize = n
 	}
 
+	if value := strings.TrimSpace(getenv("DISCOVERY_LOAD_LIMIT")); value != "" {
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("invalid DISCOVERY_LOAD_LIMIT %q: %w", value, err)
+		}
+		if n < 0 {
+			return fmt.Errorf("invalid DISCOVERY_LOAD_LIMIT %q: must be >= 0", value)
+		}
+		cfg.LoadLimit = n
+	}
+	if value := strings.TrimSpace(getenv("DISCOVERY_LOAD_WINDOW")); value != "" {
+		d, err := time.ParseDuration(value)
+		if err != nil {
+			return fmt.Errorf("invalid DISCOVERY_LOAD_WINDOW %q: %w", value, err)
+		}
+		cfg.LoadWindow = d
+	}
+	if value := strings.TrimSpace(getenv("DISCOVERY_EVICT_AFTER")); value != "" {
+		d, err := time.ParseDuration(value)
+		if err != nil {
+			return fmt.Errorf("invalid DISCOVERY_EVICT_AFTER %q: %w", value, err)
+		}
+		if d < 0 {
+			return fmt.Errorf("invalid DISCOVERY_EVICT_AFTER %q: must be >= 0", value)
+		}
+		cfg.EvictAfter = d
+	}
+
 	return nil
 }
 
@@ -156,6 +190,9 @@ func Parse(args []string, getenv func(string) string) (*Config, error) {
 		Workers:       DefaultWorkers,
 		FlushEvery:    DefaultFlushEvery,
 		BatchSize:     DefaultBatchSize,
+		LoadLimit:     DefaultLoadLimit,
+		LoadWindow:    DefaultLoadWindow,
+		EvictAfter:    0, // 0 = derive 7×LoadWindow at startup
 	}
 
 	if err := applyEnvDefaults(cfg, getenv); err != nil {
@@ -183,6 +220,10 @@ func Parse(args []string, getenv func(string) string) (*Config, error) {
 	fs.BoolVar(&cfg.DBWAL, "db-wal", cfg.DBWAL, "enable SQLite WAL journal mode (default true)")
 	fs.DurationVar(&cfg.DBBusyTimeout, "db-busy-timeout", cfg.DBBusyTimeout, "SQLite busy_timeout pragma (default 5s)")
 	fs.BoolVar(&cfg.KeepJSONOutput, "keep-json-output", cfg.KeepJSONOutput, "keep writing JSON output files even when --db is set")
+
+	fs.IntVar(&cfg.LoadLimit, "load-limit", cfg.LoadLimit, "max assets loaded from DB at startup; 0 = unlimited (default 1000)")
+	fs.DurationVar(&cfg.LoadWindow, "load-window", cfg.LoadWindow, "load only assets seen within this window (default 24h)")
+	fs.DurationVar(&cfg.EvictAfter, "evict-after", cfg.EvictAfter, "evict offline assets after this duration; 0 = 7×load-window")
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -284,6 +325,15 @@ func (c *Config) Validate() error {
 	if c.BatchSize <= 0 {
 		return errors.New("--batch-size must be greater than zero")
 	}
+	if c.LoadWindow <= 0 {
+		return errors.New("--load-window must be greater than zero")
+	}
+	if c.LoadLimit < 0 {
+		return errors.New("--load-limit must be >= 0")
+	}
+	if c.EvictAfter < 0 {
+		return errors.New("--evict-after must be >= 0")
+	}
 
 	return nil
 }
@@ -321,6 +371,9 @@ Persistence:
   --db-wal             	Enable SQLite WAL. Default: true.
   --db-busy-timeout    	SQLite busy_timeout. Default: 5s.
   --keep-json-output   	Write JSON files in --output even when --db is set.
+  --load-limit         	Max assets to load from DB at startup. Default: 1000.
+  --load-window        	Load only assets last seen within this window. Default: 24h.
+  --evict-after        	Evict offline assets after this duration. Default: 0 (= 7×load-window).
 
 Environment variable:
   DISCOVERY_PCAP, DISCOVERY_INTERFACE, DISCOVERY_OUTPUT,
@@ -329,6 +382,7 @@ Environment variable:
   DISCOVERY_QUEUE_SIZE, DISCOVERY_WORKERS,
   DISCOVERY_FLUSH_EVERY, DISCOVERY_BATCH_SIZE,
   DISCOVERY_DB, DISCOVERY_DB_WAL, DISCOVERY_DB_BUSY_TIMEOUT,
-  DISCOVERY_KEEP_JSON_OUTPUT
+  DISCOVERY_KEEP_JSON_OUTPUT,
+  DISCOVERY_LOAD_LIMIT, DISCOVERY_LOAD_WINDOW, DISCOVERY_EVICT_AFTER
 `
 }

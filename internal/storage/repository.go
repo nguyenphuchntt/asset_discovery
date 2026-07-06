@@ -7,13 +7,14 @@ import (
 )
 
 type Repository interface {
-	Init(ctx context.Context) error // create tables and run migrations
-	LoadAssets(ctx context.Context) ([]asset.AssetSnapshot, error) // load assets from DB into memory on startup
-	SaveBatch(ctx context.Context, batch Batch) error // upsert assets + events
-	SaveRunStart(ctx context.Context, run CaptureRun) error // record a new capture run (started_at, mode, source)
-	SaveRunEnd(ctx context.Context, run CaptureRun) error // finalize a capture run (ended_at, reason, packet counts)
-	SaveStats(ctx context.Context, snapshot StatsSnapshot) error // persist stats snapshots
-	Close() error // close DB connection
+	Init(ctx context.Context) error
+	LoadAssets(ctx context.Context, opts LoadOptions) ([]asset.AssetSnapshot, error)
+	LoadAssetByMAC(ctx context.Context, mac string) (*asset.AssetSnapshot, error)
+	SaveBatch(ctx context.Context, batch Batch) error
+	SaveRunStart(ctx context.Context, run CaptureRun) error
+	SaveRunEnd(ctx context.Context, run CaptureRun) error
+	SaveStats(ctx context.Context, snapshot StatsSnapshot) error
+	Close() error
 }
 
 type Batch struct {

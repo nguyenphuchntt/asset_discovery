@@ -60,7 +60,7 @@ func (p *Pipeline) Run(ctx context.Context, rawPackets <-chan capture.RawPacket)
 
 			observations := p.registry.Analyze(raw.Packet)
 			for _, obs := range observations {
-				if _, err := p.manager.Apply(obs); err != nil {
+				if _, err := p.manager.Apply(ctx, obs); err != nil {
 					p.counters.AddDropped(1)
 					p.logger.Warn("manager.Apply failed",
 						slog.String("source", string(obs.Source)),
