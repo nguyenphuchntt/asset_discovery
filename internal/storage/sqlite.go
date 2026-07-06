@@ -16,7 +16,7 @@ import (
 	"passivediscovery/internal/asset"
 )
 
-type SQLiteRepo struct {
+type SQLiteRepo struct { // implement repository
 	db *sql.DB
 }
 

@@ -35,7 +35,7 @@ type ApplyResult struct {
 	Action  ApplyAction
 }
 
-type Manager struct {
+type Manager struct { // implement persister source
 	mu       sync.RWMutex // Sweep, Apply
 	assets   map[AssetID]*Asset
 	resolver IdentityResolver
