@@ -59,8 +59,6 @@ function renderStats(s) {
     { label: "online",       value: formatNumber(s.assets_online), cls: "" },
     { label: "offline",      value: formatNumber(s.assets_offline), cls: s.assets_offline > 0 ? "" : "" },
     { label: "packets recv", value: formatNumber(s.packets_received), cls: "" },
-    { label: "int dropped",  value: formatNumber(s.internal_dropped), cls: s.internal_dropped > 0 ? "warn" : "" },
-    { label: "kernel drop",  value: formatNumber(s.kernel_dropped), cls: s.kernel_dropped > 0 ? "danger" : "" },
     { label: "db flush err", value: formatNumber(s.db_flush_errors), cls: s.db_flush_errors > 0 ? "warn" : "" },
     { label: "uptime",       value: formatUptime(s.uptime_seconds), cls: "" },
   ];
