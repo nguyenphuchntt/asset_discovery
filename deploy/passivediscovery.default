@@ -1,0 +1,32 @@
+# /etc/default/passivediscovery
+# Override these variables by uncommenting lines and editing values.
+# /etc/default/passivediscovery
+# Override these variables by uncommenting lines and editing values.
+# systemd reads this file via EnvironmentFile=-/etc/default/passivediscovery
+
+# Capture mode (pcap | live)
+# DISCOVERY_MODE=live
+
+# Network interface (live mode requires NET_RAW capability)
+# DISCOVERY_IFACE=eth0
+
+# Output directory
+# DISCOVERY_OUTPUT=/var/lib/passivediscovery/output
+
+# SQLite DB path
+# DISCOVERY_DB=/var/lib/passivediscovery/discovery.db
+
+# Number of parallel analysis workers (0 = single worker)
+# DISCOVERY_WORKERS=4
+
+# Log level: debug | info | warn | error
+# DISCOVERY_LOG_LEVEL=info
+
+# Verbose flag (-v, -vv, -vvv)
+# DISCOVERY_VERBOSE=
+
+# Keep generated JSON output in addition to DB
+# DISCOVERY_KEEP_JSON_OUTPUT=false
+
+# Run identifier (auto-generated if empty)
+# DISCOVERY_RUN_ID=

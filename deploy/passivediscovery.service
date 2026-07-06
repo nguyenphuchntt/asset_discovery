@@ -1,0 +1,37 @@
+[Unit]
+Description=Passive Network Discovery Service
+Documentation=https://github.com/nvp/passivediscovery
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=discovery
+Group=discovery
+WorkingDirectory=/opt/passivediscovery
+ExecStart=/opt/passivediscovery/discovery --mode live --iface eth0 --output /var/lib/passivediscovery/output --db /var/lib/passivediscovery/discovery.db
+Restart=on-failure
+RestartSec=10
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# Logging — send to journald
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=passivediscovery
+
+# Security sandbox
+NoNewPrivileges=false
+ProtectSystem=strict
+ReadWritePaths=/var/lib/passivediscovery
+PrivateTmp=true
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+# Environment (override via /etc/default/passivediscovery)
+EnvironmentFile=-/etc/default/passivediscovery
+
+[Install]
+WantedBy=multi-user.target
