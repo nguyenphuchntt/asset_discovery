@@ -187,15 +187,17 @@ func (r *SQLiteRepo) LoadAssets(ctx context.Context, opts LoadOptions) ([]asset.
 	var snapshots []asset.AssetSnapshot
 	for rows.Next() {
 		var (
-			s         asset.AssetSnapshot
-			extraJSON sql.NullString
-			macStr    sql.NullString
-			seenCount uint64
+			s           asset.AssetSnapshot
+			extraJSON   sql.NullString
+			macStr      sql.NullString
+			firstSeenStr sql.NullString
+			lastSeenStr  sql.NullString
+			seenCount   uint64
 		)
 		if err := rows.Scan(
 			&s.ID, &s.Status, &macStr, &s.MACVendor, &s.DeviceType, &s.Model,
 			&s.OS, &extraJSON,
-			&s.FirstSeen, &s.LastSeen, &seenCount,
+			&firstSeenStr, &lastSeenStr, &seenCount,
 		); err != nil {
 			return nil, fmt.Errorf("storage: scan asset: %w", err)
 		}
@@ -206,6 +208,8 @@ func (r *SQLiteRepo) LoadAssets(ctx context.Context, opts LoadOptions) ([]asset.
 		if extraJSON.Valid {
 			_ = json.Unmarshal([]byte(extraJSON.String), &s.Extra)
 		}
+		s.FirstSeen, _ = parseTimeStr(firstSeenStr)
+		s.LastSeen, _ = parseTimeStr(lastSeenStr)
 		snapshots = append(snapshots, s)
 	}
 	if err := rows.Err(); err != nil {
@@ -236,15 +240,17 @@ func (r *SQLiteRepo) LoadAssetByMAC(ctx context.Context, macStr string) (*asset.
 	             first_seen, last_seen, seen_count
 	      FROM assets WHERE mac = ? LIMIT 1`
 	var (
-		s         asset.AssetSnapshot
-		macCol    sql.NullString
-		extraJSON sql.NullString
-		seenCount uint64
+		s            asset.AssetSnapshot
+		macCol       sql.NullString
+		extraJSON    sql.NullString
+		firstSeenStr sql.NullString
+		lastSeenStr  sql.NullString
+		seenCount    uint64
 	)
 	err := r.db.QueryRowContext(ctx, q, macStr).Scan(
 		&s.ID, &s.Status, &macCol, &s.MACVendor, &s.DeviceType, &s.Model,
 		&s.OS, &extraJSON,
-		&s.FirstSeen, &s.LastSeen, &seenCount,
+		&firstSeenStr, &lastSeenStr, &seenCount,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -259,6 +265,8 @@ func (r *SQLiteRepo) LoadAssetByMAC(ctx context.Context, macStr string) (*asset.
 	if extraJSON.Valid {
 		_ = json.Unmarshal([]byte(extraJSON.String), &s.Extra)
 	}
+	s.FirstSeen, _ = parseTimeStr(firstSeenStr)
+	s.LastSeen, _ = parseTimeStr(lastSeenStr)
 	id := string(s.ID)
 	var err2 error
 	if s.IPv4s, s.IPv6s, err2 = loadIPs(ctx, r.db, id); err2 != nil {
@@ -447,15 +455,19 @@ func loadIPs(ctx context.Context, db *sql.DB, assetID string) (ipv4s, ipv6s map[
 
 	for rows.Next() {
 		var (
-			ip       string
-			ver      int
-			leaseSec int64
-			isActive int
-			e        asset.IPEntry
+			ip           string
+			ver          int
+			leaseSec     int64
+			isActive     int
+			firstSeenStr sql.NullString
+			lastSeenStr  sql.NullString
+			e            asset.IPEntry
 		)
-		if err := rows.Scan(&ip, &ver, &e.FirstSeen, &e.LastSeen, &leaseSec, &isActive); err != nil {
+		if err := rows.Scan(&ip, &ver, &firstSeenStr, &lastSeenStr, &leaseSec, &isActive); err != nil {
 			return nil, nil, err
 		}
+		e.FirstSeen, _ = parseTimeStr(firstSeenStr)
+		e.LastSeen, _ = parseTimeStr(lastSeenStr)
 		e.Lease = time.Duration(leaseSec) * time.Second
 		e.IsActive = isActive != 0
 		if ver == 6 {
@@ -499,10 +511,12 @@ func loadServices(ctx context.Context, db *sql.DB, assetID string) ([]asset.Serv
 	for rows.Next() {
 		var s asset.Service
 		var isActive int
+		var lastSeenStr sql.NullString
 		if err := rows.Scan(&s.Protocol, &s.Port, &s.Name, &s.Version,
-			&s.Product, &s.Vendor, &s.Banner, &isActive, &s.LastSeen); err != nil {
+			&s.Product, &s.Vendor, &s.Banner, &isActive, &lastSeenStr); err != nil {
 			return nil, err
 		}
+		s.LastSeen, _ = parseTimeStr(lastSeenStr)
 		s.IsActive = isActive != 0
 		svcs = append(svcs, s)
 	}
@@ -538,6 +552,17 @@ func boolInt(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+func parseTimeStr(s sql.NullString) (time.Time, error) {
+	if !s.Valid || s.String == "" {
+		return time.Time{}, nil
+	}
+	t, err := time.Parse(time.RFC3339Nano, s.String)
+	if err != nil {
+		t, err = time.Parse(time.RFC3339, s.String)
+	}
+	return t, err
 }
 
 func macStr(m net.HardwareAddr) string {

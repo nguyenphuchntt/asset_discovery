@@ -2,6 +2,7 @@ package analyzer
 
 import (
 	"net"
+	"strings"
 	"time"
 
 	"github.com/google/gopacket"
@@ -45,6 +46,14 @@ func (m *MDNSAnalyzer) AnalyzeCtx(ctx *PacketCtx) []asset.Observation {
 	fillObsIPsFromCtx(&obs, ctx, observedAt)
 	obs.Hostnames = mDNSHostnames(ctx.DNS)
 	obs.Services = mDNSServices(ctx.DNS, observedAt)
+
+	// Infer DeviceType from hostname patterns
+	for _, h := range obs.Hostnames {
+		if dt := mdnsDeviceTypeFromHostname(h); dt != "" {
+			obs.DeviceType = dt
+			break
+		}
+	}
 
 	if !obs.Valid() {
 		return nil
@@ -118,4 +127,26 @@ func mDNSServices(dns *layers.DNS, observedAt time.Time) []asset.Service {
 		})
 	}
 	return out
+}
+
+// mdnsDeviceTypeFromHostname heuristically infers a device type from a
+// mDNS hostname / service name pattern.  Returns "" when nothing can be
+// determined.
+func mdnsDeviceTypeFromHostname(hostname string) string {
+	h := strings.ToLower(hostname)
+	switch {
+	case strings.Contains(h, "printer"), strings.Contains(h, "officejet"),
+		strings.Contains(h, "laserjet"), strings.Contains(h, "pixma"):
+		return "printer"
+	case strings.Contains(h, "smart-tv"), strings.Contains(h, "roku"),
+		strings.Contains(h, "chromecast"), strings.Contains(h, "apple-tv"):
+		return "smart-tv"
+	case strings.Contains(h, "nas"), strings.Contains(h, "synology"),
+		strings.Contains(h, "qnap"):
+		return "nas"
+	case strings.Contains(h, "router"), strings.Contains(h, "gateway"),
+		strings.Contains(h, "openwrt"):
+		return "router"
+	}
+	return ""
 }

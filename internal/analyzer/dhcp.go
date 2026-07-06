@@ -2,6 +2,7 @@ package analyzer
 
 import (
 	"net"
+	"strings"
 	"time"
 
 	"github.com/google/gopacket"
@@ -46,6 +47,17 @@ func (d *DHCPAnalyzer) AnalyzeCtx(ctx *PacketCtx) []asset.Observation {
 			IsActive:  true,
 		}}
 	}
+
+	// Infer DeviceType / OS from hostname + vendor class when empty
+	if dt, osName := dhcpv4DeviceTypeAndOS(hostname, utils.DHCPv4ClassID(dhcp)); dt != "" || osName != "" {
+		if dt != "" {
+			obs.DeviceType = dt
+		}
+		if osName != "" {
+			obs.OS = osName
+		}
+	}
+
 	return []asset.Observation{obs}
 }
 
@@ -139,4 +151,36 @@ func appendUint(b []byte, v uint) []byte {
 		v /= 10
 	}
 	return append(b, buf[i:]...)
+}
+
+// dhcpv4DeviceTypeAndOS heuristically infers a device type and operating
+// system from the hostname and DHCP vendor class identifier.  Returns
+// empty strings when nothing can be inferred.  Caller decides whether to
+// apply the inferred value (first non-empty wins).
+func dhcpv4DeviceTypeAndOS(hostname, vendorClass string) (deviceType, os string) {
+	h := strings.ToLower(hostname)
+	switch {
+	case strings.HasPrefix(h, "android-"), strings.Contains(h, ".android"),
+		strings.Contains(h, "android"):
+		return "mobile", "android"
+	case strings.HasPrefix(h, "iphone"), strings.HasPrefix(h, "ipad"),
+		strings.HasPrefix(h, "ipod"):
+		return "mobile", "ios"
+	case strings.Contains(h, "macbook"), strings.Contains(h, "imac"):
+		return "computer", "macos"
+	case strings.Contains(h, "windows-"), strings.HasPrefix(h, "desktop-"),
+		strings.HasPrefix(h, "pc-"):
+		return "computer", "windows"
+	}
+
+	vc := strings.ToLower(vendorClass)
+	switch {
+	case strings.Contains(vc, "msft 5.0"), strings.Contains(vc, "msft 6.0"),
+		strings.Contains(vc, "msft 9."):
+		return "computer", "windows"
+	case strings.Contains(vc, "udhcpc"), strings.Contains(vc, "dhclient"),
+		strings.Contains(vc, "dhcpcd"):
+		return "", "linux"
+	}
+	return "", ""
 }

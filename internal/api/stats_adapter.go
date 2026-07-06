@@ -37,6 +37,7 @@ func (s *InMemoryStats) GetStats() StatsSnapshot {
 	snap := StatsSnapshot{}
 
 	if s.Manager != nil {
+		snap.PacketsReceived = s.Manager.PacketsReceived()
 		for _, a := range s.Manager.Snapshot() {
 			snap.AssetsTotal++
 			switch a.Status {

@@ -57,6 +57,7 @@ func (wp *WorkerPool) workerLoop(ctx context.Context, rawPackets <-chan capture.
 				return
 			}
 			wp.counters.AddProcessed(1)
+			wp.manager.RecordPacket()
 			observations := wp.registry.Analyze(raw.Packet)
 			for _, obs := range observations {
 				if _, err := wp.manager.Apply(ctx, obs); err != nil {

@@ -57,6 +57,7 @@ func (p *Pipeline) Run(ctx context.Context, rawPackets <-chan capture.RawPacket)
 			}
 
 			p.counters.AddProcessed(1)
+			p.manager.RecordPacket()
 
 			observations := p.registry.Analyze(raw.Packet)
 			for _, obs := range observations {

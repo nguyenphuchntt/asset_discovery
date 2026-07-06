@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"net"
 	"slices"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	internalConfig "passivediscovery/internal/config"
@@ -27,6 +29,8 @@ type AssetManager interface {
 	EvictStale(now time.Time, evictAfter time.Duration) int
 	DrainDirty() []AssetSnapshot
 	DrainEvents() []Event
+	RecordPacket()
+	PacketsReceived() uint64
 }
 
 type ApplyAction string
@@ -52,10 +56,11 @@ type shard struct {
 }
 
 type Manager struct {
-	shards   [ShardCount]*shard
-	resolver *ShardedResolver
-	vendor   VendorResolver
-	hydrator Hydrator
+	shards      [ShardCount]*shard
+	resolver    *ShardedResolver
+	vendor      VendorResolver
+	hydrator    Hydrator
+	packetsRecv atomic.Uint64
 }
 
 type ShardedResolver struct {
@@ -149,21 +154,65 @@ func NewManager(_ IdentityResolver, opts ...ManagerOption) *Manager {
 
 func (m *Manager) SetHydrator(h Hydrator) { m.hydrator = h }
 
+func (m *Manager) RecordPacket()      { m.packetsRecv.Add(1) }
+func (m *Manager) PacketsReceived() uint64 { return m.packetsRecv.Load() }
+
 func (m *Manager) shardForIdx(idx int) *shard { return m.shards[idx] }
 
 func (m *Manager) mergeInto(a *Asset, obs Observation) MergeResult {
 	mr := mergeObservation(a, obs)
 
-	if m.vendor == nil || a.MACVendor != "" || len(a.MAC) == 0 {
-		return mr
+	// OUI vendor lookup only when missing
+	if m.vendor != nil && a.MACVendor == "" && len(a.MAC) > 0 {
+		if name, ok := m.vendor.VendorForMAC(a.MAC.String()); ok && name != "" {
+			a.MACVendor = name
+			mr.Changed = true
+		}
 	}
-	name, ok := m.vendor.VendorForMAC(a.MAC.String())
-	if !ok || name == "" {
-		return mr
+
+	// Fallback: infer DeviceType/OS from vendor + hostname when still empty
+	if a.DeviceType == "" || a.OS == "" {
+		dt, osName := inferFromVendorHostname(a.MACVendor, a.Hostnames)
+		if a.DeviceType == "" && dt != "" {
+			a.DeviceType = dt
+			mr.Changed = true
+		}
+		if a.OS == "" && osName != "" {
+			a.OS = osName
+			mr.Changed = true
+		}
 	}
-	a.MACVendor = name
-	mr.Changed = true
+
 	return mr
+}
+
+// inferFromVendorHostname tries to guess DeviceType and OS from the MAC
+// vendor name and hostnames when no explicit clue (SSDP/DHCP/mDNS) was
+// provided.  Returns empty strings when nothing can be inferred.
+func inferFromVendorHostname(vendor string, hostnames []string) (deviceType, os string) {
+	v := strings.ToLower(vendor)
+	switch {
+	case strings.Contains(v, "apple"):
+		return "", "ios"
+	case strings.Contains(v, "samsung"), strings.Contains(v, "huawei"),
+		strings.Contains(v, "Anthropic"), strings.Contains(v, "google"):
+		return "mobile", "android"
+	case strings.Contains(v, "microsoft"):
+		return "computer", "windows"
+	case strings.Contains(v, "tp-link"), strings.Contains(v, "ubiquiti"),
+		strings.Contains(v, "netgear"):
+		return "router", "linux"
+	}
+	for _, h := range hostnames {
+		h = strings.ToLower(h)
+		if strings.HasPrefix(h, "android-") || strings.Contains(h, ".android") {
+			return "mobile", "android"
+		}
+		if strings.HasPrefix(h, "iphone") || strings.HasPrefix(h, "ipad") {
+			return "mobile", "ios"
+		}
+	}
+	return "", ""
 }
 
 func (m *Manager) Apply(ctx context.Context, obs Observation) (ApplyResult, error) {

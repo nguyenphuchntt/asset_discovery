@@ -22,7 +22,7 @@ func NewLookup(entries map[string]string) *Lookup {
 		if err != nil || vendor == "" {
 			continue
 		}
-		l.entries[norm] = vendor
+		l.entries[norm] = cleanVendor(vendor)
 		seenLens[len(norm)] = struct{}{}
 		if len(norm) > l.maxPrefixLen {
 			l.maxPrefixLen = len(norm) // maxPrefixLen init
