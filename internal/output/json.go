@@ -18,8 +18,6 @@ type JSONSink struct {
 	logger *slog.Logger
 }
 
-// NewJSONSink prepares a sink that will write into dir. The directory must
-// already exist; we don't MkdirAll here so a typo in --output fails loudly.
 func NewJSONSink(dir string, logger *slog.Logger) *JSONSink {
 	if logger == nil {
 		logger = slog.Default()
@@ -31,13 +29,8 @@ func NewJSONSink(dir string, logger *slog.Logger) *JSONSink {
 	}
 }
 
-// AssetsPath / EventsPath are exposed for tests and downstream tooling.
 func (s *JSONSink) AssetsPath() string {
 	return filepath.Join(s.dir, "discovery-"+s.stamp+".assets.json")
-}
-
-func (s *JSONSink) EventsPath() string {
-	return filepath.Join(s.dir, "discovery-"+s.stamp+".events.json")
 }
 
 func (s *JSONSink) WriteAssets(_ context.Context, snapshots []asset.AssetSnapshot) error {
@@ -47,17 +40,6 @@ func (s *JSONSink) WriteAssets(_ context.Context, snapshots []asset.AssetSnapsho
 	s.logger.Info("wrote asset snapshot",
 		slog.String("path", s.AssetsPath()),
 		slog.Int("count", len(snapshots)),
-	)
-	return nil
-}
-
-func (s *JSONSink) WriteEvents(_ context.Context, events []asset.Event) error {
-	if err := writeJSONFile(s.EventsPath(), events); err != nil {
-		return fmt.Errorf("output: write events: %w", err)
-	}
-	s.logger.Info("wrote event log",
-		slog.String("path", s.EventsPath()),
-		slog.Int("count", len(events)),
 	)
 	return nil
 }

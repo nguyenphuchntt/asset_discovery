@@ -32,8 +32,8 @@
     <button id="resetFilters" type="button">Reset</button>
   </section>
 
-  <main class="layout">
-    <section class="panel" aria-label="Assets">
+  <main class="layout" id="layout">
+    <section class="panel" aria-label="Assets" id="assetsPanel">
       <div class="panel-header">
         <h2>Assets</h2>
         <span id="assetCount" class="muted">0</span>
@@ -65,27 +65,16 @@
       </div>
     </section>
 
-    <aside class="panel" aria-label="Recent events">
+    <aside class="panel" aria-label="Asset detail" id="detailPanel">
       <div class="panel-header">
-        <h2>Events</h2>
-        <span id="eventCount" class="muted">0</span>
+        <h2>Asset detail</h2>
+        <button id="closeDetail" type="button" title="Close detail">×</button>
       </div>
-      <ul id="eventList" class="events"></ul>
-      <div id="eventEmpty" class="empty hidden">No events yet.</div>
+      <div id="detailBody" class="detail-body">
+        <p class="muted detail-placeholder">Select an asset from the table to see its details.</p>
+      </div>
     </aside>
   </main>
-
-  <div id="drawer" class="drawer hidden" aria-hidden="true">
-    <div class="drawer-inner">
-      <header>
-        <h3 id="drawerTitle">asset</h3>
-        <button id="closeDrawer" type="button">×</button>
-      </header>
-      <div id="drawerBody" class="drawer-body">
-        <p class="muted">Loading…</p>
-      </div>
-    </div>
-  </div>
 
   <div id="toast" class="toast hidden" role="status"></div>
 

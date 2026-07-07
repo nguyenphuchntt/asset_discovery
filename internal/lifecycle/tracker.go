@@ -4,12 +4,10 @@ import (
 	"context"
 	"log/slog"
 	"time"
-
-	"passivediscovery/internal/asset"
 )
 
 type Manager interface {
-	Sweep(now time.Time, offlineAfter time.Duration) []asset.Event
+	Sweep(now time.Time, offlineAfter time.Duration) int
 	EvictStale(now time.Time, evictAfter time.Duration) int
 }
 
@@ -55,8 +53,7 @@ func (t *Tracker) Run(ctx context.Context) error {
 			t.logger.Info("lifecycle tracker stopped")
 			return nil
 		case now := <-ticker.C:
-			events := t.manager.Sweep(now, t.offlineAfter)
-			if n := len(events); n > 0 {
+			if n := t.manager.Sweep(now, t.offlineAfter); n > 0 {
 				t.logger.Info("lifecycle sweep transitioned assets",
 					slog.Int("count", n),
 					slog.Time("now", now),

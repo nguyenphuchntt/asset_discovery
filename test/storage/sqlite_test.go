@@ -10,23 +10,6 @@ import (
 	"passivediscovery/internal/storage"
 )
 
-// SQLiteRepo — covered scenarios:
-//   1. OpenSQLite creates new DB
-//   2. Init is idempotent (run twice = no error)
-//   3. SaveBatch with assets → persisted
-//   4. SaveBatch with events → persisted
-//   5. SaveBatch with empty batch → no error, no-op
-//   6. LoadAssets round-trips save → load
-//   7. UpsertAsset: first insert → new row
-//   8. UpsertAsset: second upsert → updated row (COALESCE semantics)
-//   9. ReplaceChildRows: IPs replaced
-//  10. ReplaceChildRows: hostnames replaced
-//  11. ReplaceChildRows: services replaced
-//  12. SaveRunStart + SaveRunEnd round-trip
-//  13. SaveStats inserts row
-//  14. OpenSQLite with empty path → error
-//  15. Close is safe
-
 func newRepo(t *testing.T) (storage.Repository, context.CancelFunc) {
 	t.Helper()
 	dir := t.TempDir()
@@ -101,9 +84,6 @@ func TestSQLite_SaveBatchAndLoadAssets(t *testing.T) {
 	err := repo.SaveBatch(ctx, storage.Batch{
 		RunID:  "run_001",
 		Assets: []asset.AssetSnapshot{snap},
-		Events: []asset.Event{
-			{Type: asset.EventAssetCreated, AssetID: snap.ID, At: now, Source: asset.SourceARP, Detail: "test"},
-		},
 	})
 	if err != nil {
 		t.Fatalf("SaveBatch failed: %v", err)
@@ -154,8 +134,8 @@ func TestSQLite_ChildRowsIPs(t *testing.T) {
 		MAC:    mustMAC(t, "aa:bb:cc:dd:ee:02"),
 		Status: asset.StatusOnline,
 		IPv4s: map[string]asset.IPEntry{
-			"10.0.0.2":        {FirstSeen: now, LastSeen: now, IsActive: true},
-			"192.168.1.10":    {FirstSeen: now, LastSeen: now, IsActive: true},
+			"10.0.0.2":     {FirstSeen: now, LastSeen: now, IsActive: true},
+			"192.168.1.10": {FirstSeen: now, LastSeen: now, IsActive: true},
 		},
 		FirstSeen: now,
 		LastSeen:  now,
@@ -184,14 +164,11 @@ func TestSQLite_ChildRowsHostnames(t *testing.T) {
 	}
 	repo.SaveBatch(ctx, storage.Batch{RunID: "r1", Assets: []asset.AssetSnapshot{snap1}})
 
-	// Replace with different hostnames — child rows should be replaced
 	snap2 := snap1
 	snap2.Hostnames = []string{"host-b", "host-c"}
 	repo.SaveBatch(ctx, storage.Batch{RunID: "r2", Assets: []asset.AssetSnapshot{snap2}})
 
 	loaded, _ := repo.LoadAssets(ctx, storage.LoadOptions{})
-	// Child rows are MERGE semantics (UPSERT + append), not REPLACE.
-	// First save: [host-a], second save: [host-b, host-c] -> total 3 hostnames.
 	wantHostnames := map[string]bool{"host-a": true, "host-b": true, "host-c": true}
 	if len(loaded[0].Hostnames) != 3 {
 		t.Errorf("expected 3 hostnames after merge, got %d: %v", len(loaded[0].Hostnames), loaded[0].Hostnames)
@@ -249,14 +226,12 @@ func TestSQLite_UpsertCOALESCE(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
 
-	// First save: set OS=Linux
 	snap := asset.AssetSnapshot{
 		ID: "mac:aa:bb:cc:dd:ee:05", MAC: mustMAC(t, "aa:bb:cc:dd:ee:05"),
 		Status: asset.StatusOnline, OS: "Linux", FirstSeen: now, LastSeen: now,
 	}
 	repo.SaveBatch(ctx, storage.Batch{RunID: "r1", Assets: []asset.AssetSnapshot{snap}})
 
-	// Second save: OS is empty in snapshot → COALESCE should keep old value
 	snap.OS = ""
 	snap.SeenCount = 1
 	repo.SaveBatch(ctx, storage.Batch{RunID: "r2", Assets: []asset.AssetSnapshot{snap}})
@@ -300,7 +275,6 @@ func TestSQLite_SaveStats(t *testing.T) {
 	defer repo.Close()
 
 	ctx := context.Background()
-	// SaveStats has FK -> capture_runs, so seed the run first.
 	if err := repo.SaveRunStart(ctx, storage.CaptureRun{
 		ID: "run_003", Mode: "pcap", SourceName: "test.pcap",
 		StartedAt: time.Now().UTC(),
@@ -329,7 +303,6 @@ func TestSQLite_OpenEmptyPath(t *testing.T) {
 	}
 }
 
-// mustMAC parses a MAC or fails the test.
 func mustMAC(t *testing.T, s string) net.HardwareAddr {
 	t.Helper()
 	m, err := net.ParseMAC(s)

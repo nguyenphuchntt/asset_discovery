@@ -10,24 +10,6 @@ import (
 	"passivediscovery/internal/asset"
 )
 
-// Manager.Apply — covered scenarios:
-//   1. New asset created from observation
-//   2. Apply same MAC twice → second is "updated"
-//   3. Apply invalid observation → no error, no asset created
-//   4. Apply empty source → invalid
-//   5. Apply zero observed time → invalid
-//   6. Apply zero MAC → invalid
-//   7. Asset offline → next Apply transitions to online + emits event
-//   8. Apply returns AssetID matching observation's MAC-derived ID
-//   9. Multiple observations for same MAC merge into single asset
-//  10. Apply with IPv4 adds IP to asset
-//  11. Apply with hostname adds hostname to asset
-//  12. Apply with vendor sets MACVendor (first-wins)
-//  13. Apply with new vendor → no overwrite (first-wins)
-//  14. Apply with model/device_type/OS → first-wins
-//  15. Apply with services → services added
-//  16. Apply with extra map → extra merged
-
 func TestManager_Apply_NewAsset(t *testing.T) {
 	t.Parallel()
 	m := asset.NewManager(nil)
@@ -130,7 +112,6 @@ func TestManager_Apply_OfflineToOnlineTransition(t *testing.T) {
 	mac := mustMAC(t, "aa:bb:cc:dd:ee:04")
 	now := time.Now()
 
-	// First apply
 	m.Apply(context.Background(), asset.Observation{
 		Source:     asset.SourceARP,
 		ObservedAt: now,
@@ -140,9 +121,6 @@ func TestManager_Apply_OfflineToOnlineTransition(t *testing.T) {
 	// Sweep with very short offline-after → asset becomes offline
 	m.Sweep(now.Add(time.Hour), time.Minute)
 
-	// Drain events to clear
-	_ = m.DrainEvents()
-
 	// Apply again → should transition back to online
 	m.Apply(context.Background(), asset.Observation{
 		Source:     asset.SourceARP,
@@ -150,15 +128,9 @@ func TestManager_Apply_OfflineToOnlineTransition(t *testing.T) {
 		MAC:        mac,
 	})
 
-	events := m.DrainEvents()
-	hasOnline := false
-	for _, e := range events {
-		if e.Type == asset.EventStatusOnline {
-			hasOnline = true
-		}
-	}
-	if !hasOnline {
-		t.Error("expected EventStatusOnline after offline→online transition")
+	snap := m.Snapshot()[0]
+	if snap.Status != asset.StatusOnline {
+		t.Errorf("expected status=online after offline->online transition, got %q", snap.Status)
 	}
 }
 
@@ -168,7 +140,6 @@ func TestManager_Apply_MultipleObsMergeIntoOneAsset(t *testing.T) {
 	mac := mustMAC(t, "aa:bb:cc:dd:ee:05")
 	now := time.Now()
 
-	// Three observations for same MAC, different sources
 	m.Apply(context.Background(), asset.Observation{
 		Source:     asset.SourceARP,
 		ObservedAt: now,
@@ -184,10 +155,10 @@ func TestManager_Apply_MultipleObsMergeIntoOneAsset(t *testing.T) {
 		Hostnames:  []string{"my-host"},
 	})
 	m.Apply(context.Background(), asset.Observation{
-		Source:    asset.SourceSSDP,
+		Source:     asset.SourceSSDP,
 		ObservedAt: now,
-		MAC:       mac,
-		OS:        "Linux",
+		MAC:        mac,
+		OS:         "Linux",
 	})
 
 	if len(m.Snapshot()) != 1 {
@@ -268,12 +239,7 @@ func TestManager_Apply_ServicesAdded(t *testing.T) {
 	}
 }
 
-// Manager.Sweep — covered scenarios:
-//   1. Online asset past offline-after → flipped to offline
-//   2. Online asset within offline-after → stays online
-//   3. Sweep returns offline transition events
-//   4. Sweep with zero offline-after → asset stays online (no transition)
-//   5. IP lease expiry deactivates IP (IsActive=false)
+// Sweep tests
 
 func TestManager_Sweep_OfflineTransition(t *testing.T) {
 	t.Parallel()
@@ -287,10 +253,9 @@ func TestManager_Sweep_OfflineTransition(t *testing.T) {
 		MAC:        mac,
 	})
 
-	// Sweep far in the future
-	events := m.Sweep(now.Add(2*time.Hour), time.Hour)
-	if len(events) == 0 {
-		t.Fatal("expected offline event")
+	transitions := m.Sweep(now.Add(2*time.Hour), time.Hour)
+	if transitions == 0 {
+		t.Fatal("expected at least 1 transition")
 	}
 
 	snap := m.Snapshot()[0]
@@ -311,10 +276,9 @@ func TestManager_Sweep_StaysOnline(t *testing.T) {
 		MAC:        mac,
 	})
 
-	// Sweep just slightly later
-	events := m.Sweep(now.Add(10*time.Second), time.Hour)
-	if len(events) != 0 {
-		t.Errorf("expected no transition events, got %d", len(events))
+	transitions := m.Sweep(now.Add(10*time.Second), time.Hour)
+	if transitions != 0 {
+		t.Errorf("expected 0 transitions, got %d", transitions)
 	}
 
 	snap := m.Snapshot()[0]
@@ -329,7 +293,6 @@ func TestManager_Sweep_IPLeaseExpiry(t *testing.T) {
 	mac := mustMAC(t, "aa:bb:cc:dd:ee:0b")
 	now := time.Now()
 
-	// Apply with a 1-hour lease
 	m.Apply(context.Background(), asset.Observation{
 		Source:     asset.SourceDHCPv4,
 		ObservedAt: now,
@@ -339,7 +302,6 @@ func TestManager_Sweep_IPLeaseExpiry(t *testing.T) {
 		},
 	})
 
-	// Sweep way past lease expiry + grace period (5 minutes)
 	m.Sweep(now.Add(2*time.Hour), 24*time.Hour)
 
 	snap := m.Snapshot()[0]
@@ -350,11 +312,7 @@ func TestManager_Sweep_IPLeaseExpiry(t *testing.T) {
 	}
 }
 
-// DrainDirty — covered scenarios:
-//   1. After Apply, DrainDirty returns snapshot of that asset
-//   2. DrainDirty clears the dirty map
-//   3. DrainDirty returns empty when no dirty
-//   4. DrainDirty returns deep copy (modifying snapshot doesn't affect manager)
+// DrainDirty tests
 
 func TestManager_DrainDirty_ReturnsAsset(t *testing.T) {
 	t.Parallel()
@@ -403,83 +361,7 @@ func TestManager_DrainDirty_EmptyWhenNoChanges(t *testing.T) {
 	}
 }
 
-// DrainEvents — covered scenarios:
-//   1. DrainEvents returns events from Apply
-//   2. DrainEvents clears the events slice
-//   3. DrainEvents returns empty when no events
-
-func TestManager_DrainEvents_AssetCreated(t *testing.T) {
-	t.Parallel()
-	m := asset.NewManager(nil)
-	mac := mustMAC(t, "aa:bb:cc:dd:ee:0e")
-
-	m.Apply(context.Background(), asset.Observation{
-		Source:     asset.SourceARP,
-		ObservedAt: time.Now(),
-		MAC:        mac,
-	})
-
-	events := m.DrainEvents()
-	hasCreated := false
-	for _, e := range events {
-		if e.Type == asset.EventAssetCreated {
-			hasCreated = true
-		}
-	}
-	if !hasCreated {
-		t.Error("expected EventAssetCreated")
-	}
-}
-
-func TestManager_DrainEvents_Clears(t *testing.T) {
-	t.Parallel()
-	m := asset.NewManager(nil)
-	mac := mustMAC(t, "aa:bb:cc:dd:ee:0f")
-
-	m.Apply(context.Background(), asset.Observation{
-		Source:     asset.SourceARP,
-		ObservedAt: time.Now(),
-		MAC:        mac,
-	})
-	_ = m.DrainEvents()
-
-	second := m.DrainEvents()
-	if len(second) != 0 {
-		t.Errorf("expected empty after first drain, got %d", len(second))
-	}
-}
-
-func TestManager_DrainEvents_IPFirstSeen(t *testing.T) {
-	t.Parallel()
-	m := asset.NewManager(nil)
-	mac := mustMAC(t, "aa:bb:cc:dd:ee:10")
-	now := time.Now()
-
-	m.Apply(context.Background(), asset.Observation{
-		Source:     asset.SourceARP,
-		ObservedAt: now,
-		MAC:        mac,
-		IPv4s: map[string]asset.IPEntry{
-			"10.0.0.1": {FirstSeen: now, LastSeen: now, IsActive: true},
-		},
-	})
-
-	events := m.DrainEvents()
-	hasIPFirstSeen := false
-	for _, e := range events {
-		if e.Type == asset.EventIPFirstSeen {
-			hasIPFirstSeen = true
-		}
-	}
-	if !hasIPFirstSeen {
-		t.Error("expected EventIPFirstSeen for new IP")
-	}
-}
-
-// Snapshot — covered scenarios:
-//   1. Snapshot returns empty for new manager
-//   2. Snapshot returns all assets
-//   3. Snapshot returns deep copies (mutation doesn't affect manager)
+// Snapshot tests
 
 func TestManager_Snapshot_Empty(t *testing.T) {
 	t.Parallel()
@@ -517,7 +399,6 @@ func TestManager_Snapshot_DeepCopy(t *testing.T) {
 	})
 
 	snap := m.Snapshot()[0]
-	// Mutate snapshot — should not affect manager.
 	snap.IPv4s["evil"] = asset.IPEntry{}
 
 	original := m.Snapshot()[0]
@@ -526,10 +407,7 @@ func TestManager_Snapshot_DeepCopy(t *testing.T) {
 	}
 }
 
-// LoadSnapshots — covered scenarios:
-//   1. LoadSnapshots hydrates manager
-//   2. LoadSnapshots with stale snapshot is skipped
-//   3. LoadSnapshots with fresh snapshot replaces existing
+// LoadSnapshots tests
 
 func TestManager_LoadSnapshots_Hydrate(t *testing.T) {
 	t.Parallel()
@@ -561,14 +439,12 @@ func TestManager_LoadSnapshots_StaleSkipped(t *testing.T) {
 	mac := mustMAC(t, "55:55:55:55:55:55")
 	now := time.Now()
 
-	// Apply (sets LastSeen=now)
 	m.Apply(context.Background(), asset.Observation{
 		Source:     asset.SourceARP,
 		ObservedAt: now,
 		MAC:        mac,
 	})
 
-	// Try to load older snapshot
 	old := asset.AssetSnapshot{
 		ID:        asset.GenerateAssetID(mac),
 		MAC:       mac,
@@ -582,9 +458,7 @@ func TestManager_LoadSnapshots_StaleSkipped(t *testing.T) {
 	}
 }
 
-// Get — covered scenarios:
-//   1. Get existing asset returns snapshot
-//   2. Get non-existing returns false
+// Get tests
 
 func TestManager_Get_Existing(t *testing.T) {
 	t.Parallel()
@@ -615,8 +489,7 @@ func TestManager_Get_NotExisting(t *testing.T) {
 	}
 }
 
-// Concurrency — covered scenarios:
-//   1. Apply from multiple goroutines doesn't race
+// Concurrency
 
 func TestManager_ApplyConcurrent(t *testing.T) {
 	t.Parallel()
@@ -644,7 +517,6 @@ func TestManager_ApplyConcurrent(t *testing.T) {
 	}
 }
 
-// mustMAC parses a MAC or fails the test.
 func mustMAC(t *testing.T, s string) net.HardwareAddr {
 	t.Helper()
 	m, err := net.ParseMAC(s)

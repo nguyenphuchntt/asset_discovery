@@ -13,15 +13,6 @@ import (
 	"passivediscovery/internal/output"
 )
 
-// JSONSink — covered scenarios:
-//   1. WriteAssets creates .assets.json file with valid JSON
-//   2. WriteEvents creates .events.json file with valid JSON
-//   3. Round-trip JSON decode preserves data
-//   4. Empty snapshot → valid JSON (empty array)
-//   5. Empty events → valid JSON (empty array)
-//   6. AssetsPath/EventsPath predictable naming
-//   7. Nonexistent directory → error
-
 func TestJSONSink_WriteAssets(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -52,39 +43,12 @@ func TestJSONSink_WriteAssets(t *testing.T) {
 	}
 }
 
-func TestJSONSink_WriteEvents(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	sink := output.NewJSONSink(dir, nil)
-
-	events := []asset.Event{
-		{Type: asset.EventAssetCreated, AssetID: "mac:aa:bb:cc:dd:ee:01", At: time.Now().UTC()},
-	}
-
-	if err := sink.WriteEvents(context.Background(), events); err != nil {
-		t.Fatalf("WriteEvents failed: %v", err)
-	}
-
-	data, err := os.ReadFile(sink.EventsPath())
-	if err != nil {
-		t.Fatalf("read file: %v", err)
-	}
-	var loaded []asset.Event
-	if err := json.Unmarshal(data, &loaded); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
-	if len(loaded) != 1 || loaded[0].Type != asset.EventAssetCreated {
-		t.Errorf("expected 1 event, got %+v", loaded)
-	}
-}
-
 func TestJSONSink_EmptyOutput(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	sink := output.NewJSONSink(dir, nil)
 
 	_ = sink.WriteAssets(context.Background(), []asset.AssetSnapshot{})
-	_ = sink.WriteEvents(context.Background(), []asset.Event{})
 
 	data, _ := os.ReadFile(sink.AssetsPath())
 	var arr []any
@@ -100,9 +64,6 @@ func TestJSONSink_Paths(t *testing.T) {
 
 	if filepath.Ext(sink.AssetsPath()) != ".json" {
 		t.Errorf("AssetsPath should end in .json: %q", sink.AssetsPath())
-	}
-	if filepath.Ext(sink.EventsPath()) != ".json" {
-		t.Errorf("EventsPath should end in .json: %q", sink.EventsPath())
 	}
 }
 

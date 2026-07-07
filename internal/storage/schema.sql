@@ -59,18 +59,6 @@ CREATE TABLE IF NOT EXISTS asset_services (
     FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS asset_events (
-    id TEXT PRIMARY KEY,
-    run_id TEXT,
-    asset_id TEXT NOT NULL,
-    type TEXT NOT NULL,
-    at TEXT NOT NULL,
-    source TEXT NOT NULL,
-    detail TEXT,
-    inserted_at TEXT NOT NULL,
-    FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE
-);
-
 -- Capture run bookkeeping -------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS capture_runs (
@@ -118,9 +106,6 @@ CREATE INDEX IF NOT EXISTS idx_asset_ips_ip ON asset_ips(ip);
 CREATE INDEX IF NOT EXISTS idx_asset_ips_active ON asset_ips(asset_id, is_active);
 CREATE INDEX IF NOT EXISTS idx_asset_ips_last_seen ON asset_ips(last_seen);
 CREATE INDEX IF NOT EXISTS idx_asset_hostnames_hostname ON asset_hostnames(hostname);
-CREATE INDEX IF NOT EXISTS idx_asset_events_asset_time ON asset_events(asset_id, at);
-CREATE INDEX IF NOT EXISTS idx_asset_events_type_time ON asset_events(type, at);
-CREATE INDEX IF NOT EXISTS idx_asset_events_time ON asset_events(at);
 
 -- Convenience views -------------------------------------------------------------
 
@@ -142,18 +127,6 @@ CREATE VIEW IF NOT EXISTS current_assets AS
     LEFT JOIN asset_ips ip ON ip.asset_id = a.id AND ip.is_active = 1
     LEFT JOIN asset_hostnames h ON h.asset_id = a.id
     GROUP BY a.id;
-
-CREATE VIEW IF NOT EXISTS recent_events AS
-    SELECT
-        e.at,
-        e.type,
-        e.asset_id,
-        a.mac,
-        a.mac_vendor,
-        e.source,
-        e.detail
-    FROM asset_events e
-    LEFT JOIN assets a ON a.id = e.asset_id;
 
 -- Mark this schema as applied ---------------------------------------------------
 

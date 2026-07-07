@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"passivediscovery/internal/asset"
 	"passivediscovery/internal/lifecycle"
 )
 
@@ -18,9 +17,9 @@ type fakeManager struct {
 	lastEvicted atomic.Int32
 }
 
-func (f *fakeManager) Sweep(_ time.Time, _ time.Duration) []asset.Event {
+func (f *fakeManager) Sweep(_ time.Time, _ time.Duration) int {
 	f.sweepCalls.Add(1)
-	return nil
+	return 0
 }
 
 func (f *fakeManager) EvictStale(_ time.Time, _ time.Duration) int {

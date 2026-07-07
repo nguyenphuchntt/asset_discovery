@@ -16,7 +16,6 @@ type QueryRepository interface {
 	Ready(ctx context.Context) bool
 	ListAssets(ctx context.Context, filter AssetFilter) (*AssetListResponse, error)
 	GetAssetDetail(ctx context.Context, id asset.AssetID) (*AssetDetailResponse, error)
-	ListEvents(ctx context.Context, filter EventFilter) (*EventListResponse, error)
 	ListVendors(ctx context.Context) ([]string, error)
 }
 
@@ -31,14 +30,6 @@ type AssetFilter struct {
 	SeenBefore time.Time
 	Sort       string
 	Limit      int
-}
-
-type EventFilter struct {
-	AssetID string
-	Type    string
-	After   time.Time
-	Before  time.Time
-	Limit   int
 }
 
 // DBQueryRepo implements QueryRepository against SQLite.
@@ -265,22 +256,6 @@ func (q *DBQueryRepo) GetAssetDetail(ctx context.Context, id asset.AssetID) (*As
 		svcRows.Err()
 	}
 
-	// Recent events (latest 50)
-	evtRows, err := q.db.QueryContext(ctx,
-		`SELECT e.id, e.asset_id, e.type, e.at, e.source, e.detail
-		 FROM asset_events e WHERE e.asset_id = ? ORDER BY e.at DESC LIMIT 50`, string(id))
-	if err == nil {
-		defer evtRows.Close()
-		for evtRows.Next() {
-			var evt EventEntry
-			if err := evtRows.Scan(&evt.ID, &evt.AssetID, &evt.Type, &evt.At, &evt.Source, &evt.Detail); err != nil {
-				continue
-			}
-			resp.RecentEvents = append(resp.RecentEvents, evt)
-		}
-		evtRows.Err()
-	}
-
 	return &resp, nil
 }
 
@@ -303,65 +278,6 @@ func (q *DBQueryRepo) loadIPHistory(ctx context.Context, assetID string, version
 		entries = append(entries, e)
 	}
 	return entries, rows.Err()
-}
-
-// --- ListEvents ---
-
-func (q *DBQueryRepo) ListEvents(ctx context.Context, f EventFilter) (*EventListResponse, error) {
-	limit := f.Limit
-	if limit <= 0 || limit > 1000 {
-		limit = 100
-	}
-
-	var conditions []string
-	var args []any
-
-	if f.AssetID != "" {
-		conditions = append(conditions, "e.asset_id = ?")
-		args = append(args, f.AssetID)
-	}
-	if f.Type != "" {
-		conditions = append(conditions, "e.type = ?")
-		args = append(args, f.Type)
-	}
-	if !f.After.IsZero() {
-		conditions = append(conditions, "e.at > ?")
-		args = append(args, f.After.UTC().Format(time.RFC3339Nano))
-	}
-	if !f.Before.IsZero() {
-		conditions = append(conditions, "e.at < ?")
-		args = append(args, f.Before.UTC().Format(time.RFC3339Nano))
-	}
-
-	where := ""
-	if len(conditions) > 0 {
-		where = "WHERE " + strings.Join(conditions, " AND ")
-	}
-
-	query := fmt.Sprintf(
-		`SELECT e.id, e.asset_id, e.type, e.at, e.source, e.detail
-		 FROM asset_events e %s ORDER BY e.at DESC LIMIT ?`, where,
-	)
-	args = append(args, limit)
-
-	rows, err := q.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("query events: %w", err)
-	}
-	defer rows.Close()
-
-	var items []EventEntry
-	for rows.Next() {
-		var evt EventEntry
-		if err := rows.Scan(&evt.ID, &evt.AssetID, &evt.Type, &evt.At, &evt.Source, &evt.Detail); err != nil {
-			return nil, fmt.Errorf("scan event: %w", err)
-		}
-		items = append(items, evt)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return &EventListResponse{Items: emptyEventSlice(items), Page: PageInfo{Limit: limit}}, nil
 }
 
 // --- ListVendors ---
@@ -419,13 +335,6 @@ func (q *DBQueryRepo) CountAssetStatus(ctx context.Context) (total, online, offl
 func emptyAssetSlice(s []AssetListItem) []AssetListItem {
 	if s == nil {
 		return []AssetListItem{}
-	}
-	return s
-}
-
-func emptyEventSlice(s []EventEntry) []EventEntry {
-	if s == nil {
-		return []EventEntry{}
 	}
 	return s
 }

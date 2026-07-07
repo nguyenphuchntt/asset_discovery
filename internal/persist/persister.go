@@ -15,7 +15,6 @@ import (
 
 type Source interface {
 	DrainDirty() []asset.AssetSnapshot
-	DrainEvents() []asset.Event
 }
 
 type Persister struct {
@@ -134,7 +133,6 @@ func (p *Persister) Flush(ctx context.Context) error {
 		p.flushErrors.Add(1)
 		p.logger.Error("persist flush ultimately failed, batch dropped",
 			slog.Int("assets", len(batch.Assets)),
-			slog.Int("events", len(batch.Events)),
 			slog.String("err", err.Error()),
 		)
 		return err
@@ -145,7 +143,6 @@ func (p *Persister) Flush(ctx context.Context) error {
 	p.lastFlushDur.Store(int64(dur))
 	p.logger.Info("persist flush completed",
 		slog.Int("flush_assets", len(batch.Assets)),
-		slog.Int("flush_events", len(batch.Events)),
 		slog.Int64("flush_duration_ms", dur.Milliseconds()),
 		slog.Uint64("db_flush_count", p.flushCount.Load()),
 		slog.Uint64("db_flush_errors", p.flushErrors.Load()),
@@ -161,20 +158,14 @@ func (p *Persister) collectBatch(_ context.Context) (pendingBatch, error) {
 	p.latest = pendingBatch{}
 
 	assets := append(prev.Assets, p.source.DrainDirty()...)
-	events := append(prev.Events, p.source.DrainEvents()...)
 
 	if p.opts.BatchSize > 0 && len(assets) > p.opts.BatchSize {
 		overflow := assets[p.opts.BatchSize:]
 		assets = assets[:p.opts.BatchSize]
 		p.latest.Assets = overflow
 	}
-	if len(events) > p.opts.BatchSize {
-		overflow := events[p.opts.BatchSize:]
-		events = events[:p.opts.BatchSize]
-		p.latest.Events = overflow
-	}
 
-	return pendingBatch{Assets: assets, Events: events}, nil
+	return pendingBatch{Assets: assets}, nil
 }
 
 func (p *Persister) saveWithRetry(ctx context.Context, batch pendingBatch) error {
@@ -191,7 +182,6 @@ func (p *Persister) saveWithRetry(ctx context.Context, batch pendingBatch) error
 		err := p.repo.SaveBatch(ctx, storage.Batch{
 			RunID:  p.runID,
 			Assets: batch.Assets,
-			Events: batch.Events,
 		})
 		if err == nil {
 			return nil

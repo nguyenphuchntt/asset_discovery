@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	_ "embed"
-	"strings"
 )
 
 //go:embed schema.sql
@@ -14,10 +13,6 @@ func initSchema(ctx context.Context, db *sql.DB) error {
 	if _, err := db.ExecContext(ctx, schemaSQL); err != nil {
 		return fmtExecContext("init schema", err)
 	}
-	// v1 → v2: child tables (asset_ips, asset_hostnames, asset_services,
-	// asset_events) gain ON DELETE CASCADE on their FK to assets. Existing
-	// tables must be rebuilt to pick up the new FK clause since SQLite does
-	// not support ALTER FOREIGN KEY.
 	if err := applyMigrations(ctx, db); err != nil {
 		return fmtExecContext("apply migrations", err)
 	}
@@ -26,7 +21,7 @@ func initSchema(ctx context.Context, db *sql.DB) error {
 
 // applyMigrations runs versioned schema upgrades past the baseline (v1).
 func applyMigrations(ctx context.Context, db *sql.DB) error {
-	const schemaVersion = 2
+	const schemaVersion = 3
 	current, err := currentSchemaVersion(ctx, db)
 	if err != nil {
 		return err
@@ -45,6 +40,17 @@ func applyMigrations(ctx context.Context, db *sql.DB) error {
 			return err
 		}
 	}
+
+	if current < 3 {
+		if err := migrateDropAssetEvents(ctx, db); err != nil {
+			return err
+		}
+		if _, err := db.ExecContext(ctx,
+			`INSERT OR IGNORE INTO schema_migrations(version, name, applied_at)
+			 VALUES (3, 'drop_asset_events', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -60,9 +66,9 @@ func currentSchemaVersion(ctx context.Context, db *sql.DB) (int, error) {
 
 // migrateAddCascadeFK rebuilds child tables so their FK to assets gains
 // ON DELETE CASCADE. Safe for empty tables; for populated ones we round-trip
-// data through a temp table of the same shape.
+// data through a temp table of the same shape. Tables that don't exist
+// (e.g. asset_events on fresh DBs) are skipped.
 func migrateAddCascadeFK(ctx context.Context, db *sql.DB) error {
-	// Drop views that reference child tables so the RENAME won't fail.
 	if _, err := db.ExecContext(ctx, `DROP VIEW IF EXISTS current_assets`); err != nil {
 		return err
 	}
@@ -97,7 +103,10 @@ func migrateAddCascadeFK(ctx context.Context, db *sql.DB) error {
 		},
 	}
 	for _, s := range stmts {
-		tableName := s.from[:strings.Index(s.from, "(")]
+		tableName := s.from[:indexParen(s.from)]
+		if !tableExists(ctx, db, tableName) {
+			continue
+		}
 		if _, err := db.ExecContext(ctx, `ALTER TABLE `+tableName+` RENAME TO _mig_`+tableName); err != nil {
 			return err
 		}
@@ -111,8 +120,6 @@ func migrateAddCascadeFK(ctx context.Context, db *sql.DB) error {
 			return err
 		}
 	}
-	// Re-create views after migration (IF NOT EXISTS from schema.sql won't
-	// recreate dropped views, so run them explicitly).
 	if _, err := db.ExecContext(ctx, `
 		CREATE VIEW IF NOT EXISTS current_assets AS
 			SELECT a.id, a.status, a.mac, a.mac_vendor, a.device_type, a.model, a.os,
@@ -125,14 +132,48 @@ func migrateAddCascadeFK(ctx context.Context, db *sql.DB) error {
 			GROUP BY a.id`); err != nil {
 		return err
 	}
-	if _, err := db.ExecContext(ctx, `
-		CREATE VIEW IF NOT EXISTS recent_events AS
-			SELECT e.at, e.type, e.asset_id, a.mac, a.mac_vendor, e.source, e.detail
-			FROM asset_events e
-			LEFT JOIN assets a ON a.id = e.asset_id`); err != nil {
+	return nil
+}
+
+func tableExists(ctx context.Context, db *sql.DB, name string) bool {
+	var n int
+	row := db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, name)
+	if err := row.Scan(&n); err != nil {
+		return false
+	}
+	return n > 0
+}
+
+// migrateDropAssetEvents removes the asset_events table and recent_events view.
+// Event audit trail is no longer retained �� assets and their child tables
+// remain untouched.
+func migrateDropAssetEvents(ctx context.Context, db *sql.DB) error {
+	if _, err := db.ExecContext(ctx, `DROP VIEW IF EXISTS recent_events`); err != nil {
+		return err
+	}
+	if _, err := db.ExecContext(ctx, `DROP INDEX IF EXISTS idx_asset_events_asset_time`); err != nil {
+		return err
+	}
+	if _, err := db.ExecContext(ctx, `DROP INDEX IF EXISTS idx_asset_events_type_time`); err != nil {
+		return err
+	}
+	if _, err := db.ExecContext(ctx, `DROP INDEX IF EXISTS idx_asset_events_time`); err != nil {
+		return err
+	}
+	if _, err := db.ExecContext(ctx, `DROP TABLE IF EXISTS asset_events`); err != nil {
 		return err
 	}
 	return nil
+}
+
+func indexParen(s string) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == '(' {
+			return i
+		}
+	}
+	return -1
 }
 
 func fmtExecContext(op string, err error) error {

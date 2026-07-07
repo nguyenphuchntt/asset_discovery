@@ -230,8 +230,7 @@ func run(args []string) error {
 	// final sweep — synchronous (no eviction at shutdown; eviction only runs
 	// via the lifecycle tracker to keep memory bounded during long captures)
 	now := time.Now()
-	sweepEvents := manager.Sweep(now, cfg.OfflineAfter)
-	if n := len(sweepEvents); n > 0 {
+	if n := manager.Sweep(now, cfg.OfflineAfter); n > 0 {
 		logger.Info("final lifecycle sweep", slog.Int("assets_marked_offline", n))
 	}
 
@@ -265,20 +264,15 @@ func run(args []string) error {
 		if cfg.KeepJSONOutput || persister == nil {
 			jsonSink := output.NewJSONSink(cfg.OutputDirectory, logger)
 			snapshots := manager.Snapshot()
-			events := manager.DrainEvents()
 
 			if err := jsonSink.WriteAssets(context.Background(), snapshots); err != nil {
 				logger.Error("write assets failed", slog.String("err", err.Error()))
 				return err
 			}
-			if err := jsonSink.WriteEvents(context.Background(), events); err != nil {
-				logger.Error("write events failed", slog.String("err", err.Error()))
-			}
 		}
 
 		// summary
-		events := manager.DrainEvents()
-		output.NewStdoutSink().PrintSummary(manager.Snapshot(), events)
+		output.NewStdoutSink().PrintSummary(manager.Snapshot())
 
 		logger.Info("pcap processing finished; api/ui still running, press Ctrl+C to exit",
 			slog.Int("packets_processed", processed),
@@ -295,19 +289,14 @@ func run(args []string) error {
 	if cfg.KeepJSONOutput || persister == nil {
 		jsonSink := output.NewJSONSink(cfg.OutputDirectory, logger)
 		snapshots := manager.Snapshot()
-		events := manager.DrainEvents()
 
 		if err := jsonSink.WriteAssets(context.Background(), snapshots); err != nil {
 			logger.Error("write assets failed", slog.String("err", err.Error()))
 			return err
 		}
-		if err := jsonSink.WriteEvents(context.Background(), events); err != nil {
-			logger.Error("write events failed", slog.String("err", err.Error()))
-		}
 	}
 
-	events := manager.DrainEvents()
-	output.NewStdoutSink().PrintSummary(manager.Snapshot(), events)
+	output.NewStdoutSink().PrintSummary(manager.Snapshot())
 
 	logger.Info("discovery finished",
 		slog.Int("packets_processed", processed),

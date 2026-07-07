@@ -14,24 +14,10 @@ import (
 	"passivediscovery/internal/storage"
 )
 
-// Persister — covered scenarios:
-//   1. Flush with empty batch → no-op, returns nil
-//   2. Flush with snapshot+events → saveBatch called
-//   3. Flush retries on transient error
-//   4. Flush drops batch after RetryLimit exhausted
-//   5. Run() flushes on ticker
-//   6. Run() final flush on ctx cancel
-//   7. Counters() returns flushCount, flushErrors, lastFlush
-//   8. Overflow batch > BatchSize → split across flushes
-//   9. SaveBatch error returns immediately (no retry)
-//  10. context.Canceled error → no retry
-
 // fakeSource implements persist.Source for tests.
 type fakeSource struct {
 	snapshots []asset.AssetSnapshot
-	events    []asset.Event
 	dirtyCalls atomic.Int32
-	eventCalls atomic.Int32
 }
 
 func (s *fakeSource) DrainDirty() []asset.AssetSnapshot {
@@ -41,20 +27,13 @@ func (s *fakeSource) DrainDirty() []asset.AssetSnapshot {
 	return out
 }
 
-func (s *fakeSource) DrainEvents() []asset.Event {
-	s.eventCalls.Add(1)
-	out := s.events
-	s.events = nil
-	return out
-}
-
 // fakeRepo implements storage.Repository. Only SaveBatch is exercised here.
 type fakeRepo struct {
 	storage.Repository
 	saveErr        error
 	saveCallCount  atomic.Int32
 	savedBatches   []storage.Batch
-	failNextN      atomic.Int32 // simulate transient errors
+	failNextN      atomic.Int32
 }
 
 func (r *fakeRepo) SaveBatch(_ context.Context, b storage.Batch) error {
@@ -89,9 +68,6 @@ func TestPersister_FlushSavesBatch(t *testing.T) {
 		snapshots: []asset.AssetSnapshot{
 			{ID: "mac:aa:bb:cc:dd:ee:01", MAC: mustMAC(t, "aa:bb:cc:dd:ee:01"), Status: asset.StatusOnline},
 		},
-		events: []asset.Event{
-			{Type: asset.EventAssetCreated, AssetID: "mac:aa:bb:cc:dd:ee:01"},
-		},
 	}
 	repo := &fakeRepo{}
 	p := persist.New(repo, src, "run_2", slog.Default())
@@ -110,7 +86,7 @@ func TestPersister_FlushRetriesOnError(t *testing.T) {
 		snapshots: []asset.AssetSnapshot{{ID: "mac:aa:bb:cc:dd:ee:01", Status: asset.StatusOnline}},
 	}
 	repo := &fakeRepo{saveErr: errors.New("transient")}
-	repo.failNextN.Store(2) // fail twice, succeed on third
+	repo.failNextN.Store(2)
 
 	p := persist.New(repo, src, "run_3", slog.Default()).SetOptions(persist.Options{
 		BatchSize: 10, FlushEvery: time.Second,
@@ -131,7 +107,7 @@ func TestPersister_FlushDropsAfterRetryExhausted(t *testing.T) {
 		snapshots: []asset.AssetSnapshot{{ID: "mac:aa:bb:cc:dd:ee:01", Status: asset.StatusOnline}},
 	}
 	repo := &fakeRepo{saveErr: errors.New("persistent")}
-	repo.failNextN.Store(100) // always fail
+	repo.failNextN.Store(100)
 
 	p := persist.New(repo, src, "run_4", slog.Default()).SetOptions(persist.Options{
 		BatchSize: 10, FlushEvery: time.Second,
@@ -179,7 +155,6 @@ func TestPersister_CountersAfterSuccess(t *testing.T) {
 
 func TestPersister_OverflowSplitAcrossFlushes(t *testing.T) {
 	t.Parallel()
-	// 5 snapshots, BatchSize=2 → should split across 3 flushes
 	snaps := make([]asset.AssetSnapshot, 5)
 	for i := range snaps {
 		snaps[i] = asset.AssetSnapshot{
@@ -196,7 +171,6 @@ func TestPersister_OverflowSplitAcrossFlushes(t *testing.T) {
 		RetryBackoff: 5 * time.Millisecond,
 	})
 
-	// First flush: should pick up only BatchSize=2
 	if err := p.Flush(context.Background()); err != nil {
 		t.Fatalf("Flush failed: %v", err)
 	}
@@ -207,7 +181,6 @@ func TestPersister_OverflowSplitAcrossFlushes(t *testing.T) {
 		t.Errorf("expected 2 assets in first batch, got %d", len(repo.savedBatches[0].Assets))
 	}
 
-	// Second flush: BatchSize=2 truncated to 2 (1 still in latest.Assets)
 	if err := p.Flush(context.Background()); err != nil {
 		t.Fatalf("Flush failed: %v", err)
 	}
@@ -218,7 +191,6 @@ func TestPersister_OverflowSplitAcrossFlushes(t *testing.T) {
 		t.Errorf("expected 2 assets in second batch, got %d", len(repo.savedBatches[1].Assets))
 	}
 
-	// Third flush: pick up last asset
 	if err := p.Flush(context.Background()); err != nil {
 		t.Fatalf("Flush failed: %v", err)
 	}
@@ -241,7 +213,6 @@ func TestPersister_RunFinalFlushOnCancel(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// Run Run() in goroutine, then cancel
 	go func() {
 		time.Sleep(50 * time.Millisecond)
 		cancel()
@@ -250,7 +221,6 @@ func TestPersister_RunFinalFlushOnCancel(t *testing.T) {
 	if err := p.Run(ctx); err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
-	// No data to flush, so no save calls expected
 	if repo.saveCallCount.Load() != 0 {
 		t.Errorf("expected 0 save calls for empty source, got %d", repo.saveCallCount.Load())
 	}
@@ -278,7 +248,6 @@ func TestPersister_NoRetryOnContextCanceled(t *testing.T) {
 	}
 }
 
-// TestPersister_SetOptions — verifies fluent setter works.
 func TestPersister_SetOptions(t *testing.T) {
 	t.Parallel()
 	src := &fakeSource{}

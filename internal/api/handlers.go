@@ -146,35 +146,6 @@ func (h *handler) handleVendors(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, VendorsResponse{Vendors: emptyIfNil(vendors)})
 }
 
-// GET /api/events
-func (h *handler) handleEvents(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	filter := EventFilter{
-		AssetID: q.Get("asset_id"),
-		Type:    q.Get("type"),
-	}
-	if v := q.Get("limit"); v != "" {
-		filter.Limit, _ = strconv.Atoi(v)
-	}
-	if v := q.Get("after"); v != "" {
-		filter.After, _ = time.Parse(time.RFC3339, v)
-	}
-	if v := q.Get("before"); v != "" {
-		filter.Before, _ = time.Parse(time.RFC3339, v)
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-	defer cancel()
-
-	resp, err := h.repo.ListEvents(ctx, filter)
-	if err != nil {
-		h.logger.Warn("ListEvents failed", slog.String("err", err.Error()))
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
-		return
-	}
-	writeJSON(w, http.StatusOK, resp)
-}
-
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)

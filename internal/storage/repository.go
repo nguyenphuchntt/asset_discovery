@@ -20,5 +20,4 @@ type Repository interface {
 type Batch struct {
 	RunID  string
 	Assets []asset.AssetSnapshot
-	Events []asset.Event
 }

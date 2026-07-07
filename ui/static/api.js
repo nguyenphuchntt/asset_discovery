@@ -74,12 +74,10 @@ function rndHostname() {
   return `${rnd(words)}-${Math.floor(1 + Math.random() * 99)}`;
 }
 
-const SOURCES_LIST = ["arp", "dhcpv4", "dhcpv6", "mdns", "ssdp", "ethernet"];
-
 function generateMockAssets(count) {
   const assets = [];
   for (let i = 1; i <= count; i++) {
-    const isOnline = i <= count - 11; // 31 online, 11 offline
+    const isOnline = i <= count - 11;
     const vendor = rnd(VENDORS);
     const mac = rndMAC(i);
     const ips = Array.from({ length: 1 + Math.floor(Math.random() * 2) }, () => rndIP());
@@ -100,7 +98,6 @@ function generateMockAssets(count) {
       first_seen: mockHoursAgo(3 + Math.random() * 72),
       last_seen: mockMinutesAgo(lastMinsAgo),
       seen_count: 10 + Math.floor(Math.random() * 500),
-      // extra fields for detail view (not part of list API but handy for mock)
       _ipv4_history: ips.map(ip => ({
         ip,
         first_seen: mockHoursAgo(2 + Math.random() * 20),
@@ -145,34 +142,10 @@ function generateMockServices(isOnline) {
 
 let mockAssets = generateMockAssets(42);
 
-const MOCK_EVENTS = (() => {
-  const types = [
-    ["asset_created",   "created"],
-    ["status_online",   "online"],
-    ["status_offline",  "offline"],
-    ["service_seen",    "created"],
-    ["identity_merged", "merged"],
-    ["ip_first_seen",   "created"],
-    ["hostname_first_seen", "created"],
-  ];
-  return Array.from({ length: 80 }, (_, i) => {
-    const asset = rnd(mockAssets);
-    const [type, cls] = rnd(types);
-    return {
-      id: `evt_${String(i).padStart(4, "0")}`,
-      asset_id: asset.id,
-      type,
-      at: mockMinutesAgo(Math.floor(Math.random() * 300)),
-      source: rnd(SOURCES_LIST),
-      detail: `${type.replace(/_/g, " ")} from ${asset.mac.slice(0, 8)}…`,
-    };
-  }).sort((a, b) => new Date(b.at) - new Date(a.at));
-})();
-
 const MOCK_UI_CONFIG = {
   refresh_every_ms: 5000,
   api_base_path: "/api",
-  features: { asset_detail: true, events: true, stats: true, sse: false },
+  features: { asset_detail: true, stats: true, sse: false },
 };
 
 // ---------------------------------------------------------------------------
@@ -258,30 +231,10 @@ export async function fetchAssetDetail(assetId, { signal } = {}) {
       ipv6_history: [],
       hostnames: full._hostnames_history,
       services: full._services,
-      recent_events: MOCK_EVENTS.filter(e => e.asset_id === assetId).slice(0, 20),
     };
   }
 
   return realFetch(`/assets/${encodeURIComponent(assetId)}`, { signal });
-}
-
-export async function fetchEvents({ assetId, after, limit = 100, signal } = {}) {
-  if (state.useMock) {
-    await mockDelay();
-    let items = [...MOCK_EVENTS];
-    if (assetId) items = items.filter(e => e.asset_id === assetId);
-    if (after) items = items.filter(e => new Date(e.at) > new Date(after));
-    return {
-      items: items.slice(0, limit),
-      page: { limit, next_cursor: items.length > limit ? "1" : null },
-    };
-  }
-
-  const params = new URLSearchParams();
-  params.set("limit", limit);
-  if (assetId) params.set("asset_id", assetId);
-  if (after) params.set("after", after);
-  return realFetch(`/events?${params}`, { signal });
 }
 
 export async function fetchVendors({ signal } = {}) {

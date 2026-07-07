@@ -6,7 +6,7 @@
 import { state, resetFilters } from "./state.js";
 import {
   fetchUIConfig, fetchStats, fetchAssets,
-  fetchAssetDetail, fetchEvents, fetchVendors, probeRealAPI,
+  fetchAssetDetail, fetchVendors, probeRealAPI,
 } from "./api.js";
 import {
   formatRelativeTime, formatClockTime,
@@ -18,7 +18,6 @@ import {
 // ---------------------------------------------------------------------------
 
 const $ = (sel) => document.querySelector(sel);
-const $$ = (sel) => document.querySelectorAll(sel);
 
 const dom = {};
 
@@ -38,13 +37,10 @@ function cacheDOM() {
   dom.prevPage      = $("#prevPage");
   dom.nextPage      = $("#nextPage");
   dom.pageInfo      = $("#pageInfo");
-  dom.eventList     = $("#eventList");
-  dom.eventEmpty    = $("#eventEmpty");
-  dom.eventCount    = $("#eventCount");
-  dom.drawer        = $("#drawer");
-  dom.drawerTitle   = $("#drawerTitle");
-  dom.drawerBody    = $("#drawerBody");
-  dom.closeDrawer   = $("#closeDrawer");
+  dom.layout        = $("#layout");
+  dom.detailPanel   = $("#detailPanel");
+  dom.detailBody    = $("#detailBody");
+  dom.closeDetail   = $("#closeDetail");
   dom.toast         = $("#toast");
 }
 
@@ -89,8 +85,10 @@ function renderAssetRows(items) {
   }
   dom.assetEmpty.classList.add("hidden");
 
-  dom.assetTbody.innerHTML = items.map(a => `
-    <tr data-id="${escapeHTML(a.id)}">
+  dom.assetTbody.innerHTML = items.map(a => {
+    const selected = (state.selectedAssetId === a.id) ? " selected" : "";
+    return `
+    <tr data-id="${escapeHTML(a.id)}" class="${selected.trim()}">
       <td class="status-cell"><span class="status-dot ${escapeHTML(a.status)}"></span>${escapeHTML(a.status || "-")}</td>
       <td class="ip-cell">${(a.current_ips || []).map(escapeHTML).join(", ")}</td>
       <td class="mac-cell">${escapeHTML(a.mac)}</td>
@@ -101,70 +99,42 @@ function renderAssetRows(items) {
       <td title="${formatClockTime(a.last_seen)}">${formatRelativeTime(a.last_seen)}</td>
       <td>${formatNumber(a.seen_count)}</td>
     </tr>
-  `).join("");
-}
-
-// ---------------------------------------------------------------------------
-// Render: events list
-// ---------------------------------------------------------------------------
-
-function renderEvents(items) {
-  if (!items.length) {
-    dom.eventList.innerHTML = "";
-    dom.eventEmpty.classList.remove("hidden");
-    return;
-  }
-  dom.eventEmpty.classList.add("hidden");
-
-  dom.eventList.innerHTML = items.map(e => {
-    const cls = eventTypeClass(e.type);
-    return `
-      <li class="event-item" data-asset="${escapeHTML(e.asset_id || "")}">
-        <div>
-          <span class="event-type ${cls}">${escapeHTML(e.type)}</span>
-          <span class="event-time">${formatRelativeTime(e.at)}</span>
-        </div>
-        <span class="event-detail">${escapeHTML(e.detail)}</span>
-      </li>
-    `;
+  `;
   }).join("");
 }
 
-function eventTypeClass(type) {
-  if (type.includes("created")) return "created";
-  if (type.includes("offline")) return "offline";
-  if (type.includes("online"))  return "online";
-  if (type.includes("merged"))  return "merged";
-  return "";
-}
-
 // ---------------------------------------------------------------------------
-// Render: drawer detail
+// Render: asset detail (sidebar)
 // ---------------------------------------------------------------------------
 
-async function openDrawer(assetId) {
+async function openDetail(assetId) {
   state.selectedAssetId = assetId;
   state.selectedAssetDetail = null;
-  dom.drawerTitle.textContent = assetId;
-  dom.drawerBody.innerHTML = '<p class="muted">Loading…</p>';
-  dom.drawer.classList.remove("hidden");
-  dom.drawer.setAttribute("aria-hidden", "false");
+  dom.detailPanel.classList.remove("hidden");
+  dom.layout.classList.add("has-detail");
+  highlightSelectedRow();
+
+  dom.detailBody.innerHTML = '<p class="muted detail-placeholder">Loading…</p>';
 
   try {
     const detail = await fetchAssetDetail(assetId);
     state.selectedAssetDetail = detail;
-    renderDrawerDetail(detail);
+    renderDetail(detail);
   } catch (err) {
-    dom.drawerBody.innerHTML = `<p class="muted">Failed to load asset: ${escapeHTML(err.message)}</p>`;
+    dom.detailBody.innerHTML = `<p class="muted detail-placeholder">Failed to load asset: ${escapeHTML(err.message)}</p>`;
   }
 }
 
-function renderDrawerDetail(d) {
+function highlightSelectedRow() {
+  const rows = dom.assetTbody.querySelectorAll("tr[data-id]");
+  rows.forEach(r => r.classList.toggle("selected", r.dataset.id === state.selectedAssetId));
+}
+
+function renderDetail(d) {
   if (!d) return;
   const a = d.asset;
-  dom.drawerTitle.textContent = a.id;
 
-  dom.drawerBody.innerHTML = `
+  dom.detailBody.innerHTML = `
     <div class="drawer-section">
       <h4>Identity</h4>
       <dl>
@@ -190,7 +160,6 @@ function renderDrawerDetail(d) {
     ${renderIPv6HistorySection(d.ipv6_history)}
     ${renderHostnamesSection(d.hostnames)}
     ${renderServicesSection(d.services)}
-    ${renderRecentEventsSection(d.recent_events)}
     ${renderExtrasSection(d.extras)}
   `;
 }
@@ -254,23 +223,6 @@ function renderServicesSection(services) {
   `;
 }
 
-function renderRecentEventsSection(events) {
-  if (!events || !events.length) return "";
-  return `
-    <div class="drawer-section">
-      <h4>Recent events</h4>
-      <ul class="service-list">
-        ${events.map(e => `
-          <li>
-            <span class="event-type ${eventTypeClass(e.type)}">${escapeHTML(e.type)}</span>
-            <span>${escapeHTML(e.detail)}</span>
-          </li>
-        `).join("")}
-      </ul>
-    </div>
-  `;
-}
-
 function renderExtrasSection(extras) {
   const entries = extras ? Object.entries(extras) : [];
   if (!entries.length) return "";
@@ -294,11 +246,12 @@ function formatExtraValue(v) {
   return JSON.stringify(v, null, 2);
 }
 
-function closeDrawer() {
+function closeDetail() {
   state.selectedAssetId = null;
   state.selectedAssetDetail = null;
-  dom.drawer.classList.add("hidden");
-  dom.drawer.setAttribute("aria-hidden", "true");
+  dom.detailPanel.classList.add("hidden");
+  dom.layout.classList.remove("has-detail");
+  highlightSelectedRow();
 }
 
 // ---------------------------------------------------------------------------
@@ -375,22 +328,19 @@ async function runPoll() {
   const timeout = setTimeout(() => controller.abort(), state.config.refreshEveryMs);
 
   try {
-    const [statsRes, assetsRes, eventsRes] = await Promise.all([
+    const [statsRes, assetsRes] = await Promise.all([
       fetchStats({ signal: controller.signal }),
       fetchAssets({ filters: state.filters, signal: controller.signal }),
-      fetchEvents({ limit: 100, signal: controller.signal }),
     ]);
 
     state.stats = statsRes;
     state.assets = assetsRes.items;
     state.page.nextCursor = assetsRes.page.next_cursor;
-    state.events = eventsRes.items;
 
     renderStats(state.stats);
     renderAssetRows(state.assets);
     dom.assetCount.textContent = formatNumber(state.assets.length);
-    renderEvents(state.events);
-    dom.eventCount.textContent = formatNumber(state.events.length);
+    highlightSelectedRow();
     renderPagination();
 
     state.lastUpdatedAt = new Date();
@@ -402,14 +352,20 @@ async function runPoll() {
     dom.refreshInterval.textContent = `every ${(state.config.refreshEveryMs / 1000).toFixed(0)}s`;
     updateConnectionBadge(true);
 
-    // If detail drawer is open, refresh it too.
-    if (state.selectedAssetId && !dom.drawer.classList.contains("hidden")) {
-      try {
-        const detail = await fetchAssetDetail(state.selectedAssetId, { signal: controller.signal });
-        state.selectedAssetDetail = detail;
-        renderDrawerDetail(detail);
-      } catch {
-        // Keep stale data visible; don't close drawer.
+    // Refresh detail if open
+    if (state.selectedAssetId) {
+      const stillVisible = state.assets.some(a => a.id === state.selectedAssetId);
+      if (stillVisible) {
+        try {
+          const detail = await fetchAssetDetail(state.selectedAssetId, { signal: controller.signal });
+          state.selectedAssetDetail = detail;
+          renderDetail(detail);
+        } catch {
+          // keep stale detail visible
+        }
+      } else {
+        // Selected asset is no longer in current page — close detail.
+        closeDetail();
       }
     }
   } catch (err) {
@@ -426,7 +382,6 @@ async function runPoll() {
 }
 
 async function bootPoll() {
-  // Auto-detect: probe for the real API; switch off mock if reachable.
   if (state.useMock) {
     const reachable = await probeRealAPI();
     if (reachable) {
@@ -434,7 +389,6 @@ async function bootPoll() {
     }
   }
 
-  // Load UI config first.
   try {
     state.uiConfig = await fetchUIConfig();
     state.config.refreshEveryMs = state.uiConfig.refresh_every_ms;
@@ -496,26 +450,23 @@ function bindEvents() {
 
   dom.assetTbody.addEventListener("click", (e) => {
     const tr = e.target.closest("tr[data-id]");
-    if (tr) openDrawer(tr.dataset.id);
+    if (!tr) return;
+    const id = tr.dataset.id;
+    // Toggle: clicking same row closes detail
+    if (state.selectedAssetId === id) {
+      closeDetail();
+    } else {
+      openDetail(id);
+    }
   });
 
-  dom.eventList.addEventListener("click", (e) => {
-    const li = e.target.closest("li[data-asset]");
-    if (li && li.dataset.asset) openDrawer(li.dataset.asset);
-  });
-
-  dom.closeDrawer.addEventListener("click", closeDrawer);
-
-  dom.drawer.addEventListener("click", (e) => {
-    if (e.target === dom.drawer) closeDrawer();
-  });
+  dom.closeDetail.addEventListener("click", closeDetail);
 
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && !dom.drawer.classList.contains("hidden")) closeDrawer();
+    if (e.key === "Escape" && state.selectedAssetId) closeDetail();
   });
 
   dom.prevPage.addEventListener("click", () => {
-    // For mock: cursor is a numeric offset; go back by limit.
     const cur = parseInt(state.page.cursor, 10) || 0;
     state.page.cursor = Math.max(0, cur - state.page.limit);
     refreshData();
@@ -530,25 +481,24 @@ function bindEvents() {
 
   document.addEventListener("visibilitychange", handleVisibilityChange);
 
-  // Populate MAC vendor dropdown (fetchVendors works for both mock and live)
   populateVendorFilter();
 }
 
 async function refreshData() {
   try {
-    const [assetsRes, eventsRes] = await Promise.all([
-      fetchAssets({ filters: state.filters }),
-      fetchEvents({ limit: 100 }),
-    ]);
+    const assetsRes = await fetchAssets({ filters: state.filters });
     state.assets = assetsRes.items;
     state.page.nextCursor = assetsRes.page.next_cursor;
-    state.events = eventsRes.items;
 
     renderAssetRows(state.assets);
     dom.assetCount.textContent = formatNumber(state.assets.length);
-    renderEvents(state.events);
-    dom.eventCount.textContent = formatNumber(state.events.length);
+    highlightSelectedRow();
     renderPagination();
+
+    // Drop detail if its asset isn't on this page anymore
+    if (state.selectedAssetId && !state.assets.some(a => a.id === state.selectedAssetId)) {
+      closeDetail();
+    }
   } catch (err) {
     showToast(`refresh failed: ${err.message}`);
   }

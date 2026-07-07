@@ -10,32 +10,18 @@ import (
 	"passivediscovery/internal/output"
 )
 
-// StdoutSink — covered scenarios:
-//   1. PrintSummary renders header
-//   2. Renders status breakdown (online/offline counts)
-//   3. Renders event type breakdown
-//   4. Renders per-asset box with all fields
-//   5. MAC, Vendor, IPv4s/IPv6s shown
-//   6. Hostnames, OS, Model, DeviceType shown
-//   7. Services shown (with client/server role)
-//   8. Extras shown (sorted alphabetically)
-//   9. First/Last seen + SeenCount shown
-//  10. Empty snapshots → graceful (just header)
-//  11. Nil Out → defaults to stdout (don't crash)
-//  12. Multiple assets → multiple boxes
-
 func TestStdoutSink_PrintSummary_Empty(t *testing.T) {
 	t.Parallel()
 	var buf bytes.Buffer
 	sink := &output.StdoutSink{Out: &buf}
-	sink.PrintSummary(nil, nil)
+	sink.PrintSummary(nil)
 
-	output := buf.String()
-	if !strings.Contains(output, "discovery summary") {
-		t.Errorf("expected 'discovery summary' header, got %q", output)
+	out := buf.String()
+	if !strings.Contains(out, "discovery summary") {
+		t.Errorf("expected 'discovery summary' header, got %q", out)
 	}
-	if !strings.Contains(output, "assets discovered : 0") {
-		t.Errorf("expected 0 assets in summary, got %q", output)
+	if !strings.Contains(out, "assets discovered : 0") {
+		t.Errorf("expected 0 assets in summary, got %q", out)
 	}
 }
 
@@ -49,7 +35,7 @@ func TestStdoutSink_PrintSummary_StatusBreakdown(t *testing.T) {
 		{ID: "id2", MAC: mustMAC(t, "22:22:22:22:22:22"), Status: asset.StatusOnline},
 		{ID: "id3", MAC: mustMAC(t, "33:33:33:33:33:33"), Status: asset.StatusOffline},
 	}
-	sink.PrintSummary(snapshots, nil)
+	sink.PrintSummary(snapshots)
 	out := buf.String()
 
 	if !strings.Contains(out, "online: 2") {
@@ -57,27 +43,6 @@ func TestStdoutSink_PrintSummary_StatusBreakdown(t *testing.T) {
 	}
 	if !strings.Contains(out, "offline: 1") {
 		t.Errorf("expected 'offline: 1', got %q", out)
-	}
-}
-
-func TestStdoutSink_PrintSummary_EventBreakdown(t *testing.T) {
-	t.Parallel()
-	var buf bytes.Buffer
-	sink := &output.StdoutSink{Out: &buf}
-
-	events := []asset.Event{
-		{Type: asset.EventAssetCreated, AssetID: "id1"},
-		{Type: asset.EventAssetCreated, AssetID: "id2"},
-		{Type: asset.EventStatusOnline, AssetID: "id3"},
-	}
-	sink.PrintSummary(nil, events)
-	out := buf.String()
-
-	if !strings.Contains(out, "asset_created") {
-		t.Errorf("expected asset_created in breakdown, got %q", out)
-	}
-	if !strings.Contains(out, "status_online") {
-		t.Errorf("expected status_online in breakdown, got %q", out)
 	}
 }
 
@@ -101,7 +66,7 @@ func TestStdoutSink_PrintSummary_PerAssetBox(t *testing.T) {
 		LastSeen:  time.Now(),
 		SeenCount: 42,
 	}
-	sink.PrintSummary([]asset.AssetSnapshot{snap}, nil)
+	sink.PrintSummary([]asset.AssetSnapshot{snap})
 	out := buf.String()
 
 	if !strings.Contains(out, "TestVendor") {
@@ -131,7 +96,7 @@ func TestStdoutSink_PrintSummary_ServicesWithRoles(t *testing.T) {
 			{Protocol: "tcp", Port: 443, Name: "https", IsClient: true},
 		},
 	}
-	sink.PrintSummary([]asset.AssetSnapshot{snap}, nil)
+	sink.PrintSummary([]asset.AssetSnapshot{snap})
 	out := buf.String()
 
 	if !strings.Contains(out, "[server]") {
@@ -159,10 +124,9 @@ func TestStdoutSink_PrintSummary_ExtrasSorted(t *testing.T) {
 			"m_middle": "M",
 		},
 	}
-	sink.PrintSummary([]asset.AssetSnapshot{snap}, nil)
+	sink.PrintSummary([]asset.AssetSnapshot{snap})
 	out := buf.String()
 
-	// Verify alphabetical order: a_first appears before m_middle before z_last
 	posA := strings.Index(out, "a_first")
 	posM := strings.Index(out, "m_middle")
 	posZ := strings.Index(out, "z_last")
@@ -184,10 +148,9 @@ func TestStdoutSink_PrintSummary_BoxDrawingChars(t *testing.T) {
 		ID: "id1", MAC: mustMAC(t, "aa:bb:cc:dd:ee:01"),
 		Status: asset.StatusOnline,
 	}
-	sink.PrintSummary([]asset.AssetSnapshot{snap}, nil)
+	sink.PrintSummary([]asset.AssetSnapshot{snap})
 	out := buf.String()
 
-	// Unicode box-drawing chars
 	if !strings.Contains(out, "┌") {
 		t.Error("expected top-left box char ┌")
 	}
@@ -223,10 +186,9 @@ func TestStdoutSink_PrintSummary_MultipleAssets(t *testing.T) {
 		{ID: "id2", MAC: mustMAC(t, "bb:bb:cc:dd:ee:02"), Status: asset.StatusOnline},
 		{ID: "id3", MAC: mustMAC(t, "cc:bb:cc:dd:ee:03"), Status: asset.StatusOffline},
 	}
-	sink.PrintSummary(snaps, nil)
+	sink.PrintSummary(snaps)
 	out := buf.String()
 
-	// Should have 3 boxes
 	if strings.Count(out, "┌") != 3 {
 		t.Errorf("expected 3 box starts, got %d", strings.Count(out, "┌"))
 	}

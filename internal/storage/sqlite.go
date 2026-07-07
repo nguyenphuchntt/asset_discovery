@@ -2,9 +2,7 @@ package storage
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -73,10 +71,10 @@ func (r *SQLiteRepo) DB() *sql.DB {
 
 // save batch
 func (r *SQLiteRepo) SaveBatch(ctx context.Context, batch Batch) error {
-	if len(batch.Assets) == 0 && len(batch.Events) == 0 { // nothing 
+	if len(batch.Assets) == 0 {
 		return nil
 	}
-	tx, err := r.db.BeginTx(ctx, nil) // begin transaction
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("storage: begin tx: %w", err)
 	}
@@ -86,11 +84,6 @@ func (r *SQLiteRepo) SaveBatch(ctx context.Context, batch Batch) error {
 			return err
 		}
 		if err := replaceChildRows(ctx, tx, s); err != nil {
-			return err
-		}
-	}
-	for _, ev := range batch.Events {
-		if err := insertEvent(ctx, tx, ev, batch.RunID); err != nil {
 			return err
 		}
 	}
@@ -394,52 +387,7 @@ func upsertIPRow(ctx context.Context, tx *sql.Tx, assetID, ip string, ver int, e
 	return nil
 }
 
-func insertIPRow(ctx context.Context, tx *sql.Tx, assetID, ip string, ver int, e asset.IPEntry, now string) error {
-	const q = `INSERT INTO asset_ips
-		(asset_id, ip, version, first_seen, last_seen, lease_seconds, is_active, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-	_, err := tx.ExecContext(ctx, q,
-		assetID, ip, ver,
-		timeFmt(e.FirstSeen), timeFmt(e.LastSeen),
-		int64(e.Lease.Seconds()), boolInt(e.IsActive), now,
-	)
-	if err != nil {
-		return fmt.Errorf("storage: insert IP %s/%s: %w", assetID, ip, err)
-	}
-	return nil
-}
-
-func insertEvent(ctx context.Context, tx *sql.Tx, ev asset.Event, runID string) error {
-	evID := generateEventID(ev, runID)
-	const q = `INSERT OR IGNORE INTO asset_events
-		(id, run_id, asset_id, type, at, source, detail, inserted_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-	_, err := tx.ExecContext(ctx, q,
-		evID, nullString(runID), ev.AssetID, ev.Type,
-		timeFmt(ev.At), ev.Source, ev.Detail,
-		timeFmt(time.Now().UTC()),
-	)
-	if err != nil {
-		return fmt.Errorf("storage: insert event %s: %w", evID, err)
-	}
-	return nil
-}
-
-
-// generateEventID produces a deterministic SHA256-based ID from the event fields.
-// Duplicate events with identical fields produce the same ID, enabling INSERT OR IGNORE dedup.
-func generateEventID(ev asset.Event, runID string) string {
-	h := sha256.New()
-	h.Write([]byte(string(ev.AssetID)))
-	h.Write([]byte(ev.Type))
-	h.Write([]byte(ev.At.UTC().Format(time.RFC3339Nano)))
-	h.Write([]byte(ev.Source))
-	h.Write([]byte(ev.Detail))
-	h.Write([]byte(runID))
-	return hex.EncodeToString(h.Sum(nil))
-}
-
-// loaders 
+// loaders
 
 func loadIPs(ctx context.Context, db *sql.DB, assetID string) (ipv4s, ipv6s map[string]asset.IPEntry, err error) {
 	const q = `SELECT ip, version, first_seen, last_seen, lease_seconds, is_active
