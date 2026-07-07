@@ -22,7 +22,6 @@ const $ = (sel) => document.querySelector(sel);
 const dom = {};
 
 function cacheDOM() {
-  dom.connStatus    = $("#connStatus");
   dom.lastUpdated   = $("#lastUpdated");
   dom.refreshBtn    = $("#refreshBtn");
   dom.statsBar      = $("#statsBar");
@@ -274,27 +273,6 @@ function applyFiltersAndResetPage() {
 }
 
 // ---------------------------------------------------------------------------
-// Connection status badge
-// ---------------------------------------------------------------------------
-
-function updateConnectionBadge(connected) {
-  if (connected) {
-    dom.connStatus.className = "badge ok";
-    dom.connStatus.textContent = state.useMock ? "mock data" : "connected";
-  } else {
-    dom.connStatus.className = "badge error";
-    dom.connStatus.textContent = "error";
-  }
-}
-
-function updateStaleBadge(stale) {
-  if (stale) {
-    dom.connStatus.className = "badge stale";
-    dom.connStatus.textContent = "stale";
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Toast
 // ---------------------------------------------------------------------------
 
@@ -348,9 +326,6 @@ async function runPoll() {
 
     dom.lastUpdated.textContent = `updated ${formatRelativeTime(state.lastUpdatedAt.toISOString())}`;
     dom.refreshInterval.textContent = `every ${(state.config.refreshEveryMs / 1000).toFixed(0)}s`;
-    updateConnectionBadge(true);
-
-    // Refresh detail if open
     if (state.selectedAssetId) {
       const stillVisible = state.assets.some(a => a.id === state.selectedAssetId);
       if (stillVisible) {
@@ -370,7 +345,6 @@ async function runPoll() {
     state.lastError = err;
     state.consecutiveErrors++;
     if (state.stats) state.stale = true;
-    updateStaleBadge(state.stale);
     if (state.consecutiveErrors >= 3) showToast("refresh failed, backing off…");
   } finally {
     clearTimeout(timeout);
@@ -395,7 +369,6 @@ async function bootPoll() {
     // Keep defaults.
   }
 
-  updateConnectionBadge(true);
   await runPoll();
 }
 
