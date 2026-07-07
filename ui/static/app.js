@@ -33,7 +33,6 @@ function cacheDOM() {
   dom.assetTbody    = $("#assetTbody");
   dom.assetEmpty    = $("#assetEmpty");
   dom.assetLoading  = $("#assetLoading");
-  dom.assetCount    = $("#assetCount");
   dom.prevPage      = $("#prevPage");
   dom.nextPage      = $("#nextPage");
   dom.pageInfo      = $("#pageInfo");
@@ -339,7 +338,6 @@ async function runPoll() {
 
     renderStats(state.stats);
     renderAssetRows(state.assets);
-    dom.assetCount.textContent = formatNumber(state.assets.length);
     highlightSelectedRow();
     renderPagination();
 
@@ -491,7 +489,6 @@ async function refreshData() {
     state.page.nextCursor = assetsRes.page.next_cursor;
 
     renderAssetRows(state.assets);
-    dom.assetCount.textContent = formatNumber(state.assets.length);
     highlightSelectedRow();
     renderPagination();
 

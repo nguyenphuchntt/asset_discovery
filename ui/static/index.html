@@ -8,7 +8,7 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">passivediscovery</div>
+    <div class="brand"></div>
     <div class="status">
       <span id="connStatus" class="badge ok">loading…</span>
       <span id="lastUpdated" class="muted">—</span>
@@ -20,7 +20,7 @@
   <section id="statsBar" class="stats" aria-label="Runtime statistics"></section>
 
   <section class="filters" aria-label="Filters">
-    <input id="qFilter" type="search" placeholder="Search MAC / IP / hostname / MAC vendor" autocomplete="off" />
+    <input id="qFilter" type="search" placeholder="Search MAC / IP / hostname" autocomplete="off" />
     <select id="statusFilter">
       <option value="">All statuses</option>
       <option value="online">online</option>
@@ -36,7 +36,7 @@
     <section class="panel" aria-label="Assets" id="assetsPanel">
       <div class="panel-header">
         <h2>Assets</h2>
-        <span id="assetCount" class="muted">0</span>
+        <span id="assetCount" class="muted"></span>
       </div>
       <div class="table-wrap">
         <table id="assetTable">
@@ -65,7 +65,7 @@
       </div>
     </section>
 
-    <aside class="panel" aria-label="Asset detail" id="detailPanel">
+    <aside class="panel hidden" aria-label="Asset detail" id="detailPanel">
       <div class="panel-header">
         <h2>Asset detail</h2>
         <button id="closeDetail" type="button" title="Close detail">×</button>
