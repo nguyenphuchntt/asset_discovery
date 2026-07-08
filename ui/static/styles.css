@@ -75,20 +75,60 @@ body {
 /* ---------- Stats strip ---------- */
 .stats {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+  grid-template-columns: 1.5fr 1fr; /* tiles 60% | chart 40% */
   gap: var(--gap);
   padding: 10px 16px;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
 }
 
+.stats-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: var(--gap);
+  align-items: center;
+  text-align: center;
+}
+
 .stat-tile {
-  padding: 8px 12px;
+  padding: 6px 10px;
   background: var(--bg);
   border-radius: var(--radius);
   text-align: center;
 }
-.stat-tile .value { font-size: 20px; font-weight: 700; line-height: 1.2; }
+.stat-tile .value { font-size: 18px; font-weight: 700; line-height: 1.2; }
+.stat-tile .label { font-size: 10px; text-transform: uppercase; color: var(--text-muted); letter-spacing: .4px; }
+
+.stat-chart {
+  display: flex; flex-direction: column;
+  padding: 6px 10px;
+  background: var(--bg);
+  border-radius: var(--radius);
+  min-width: 0;
+}
+.chart-label {
+  font-size: 10px; text-transform: uppercase; letter-spacing: .4px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+.rate-chart {
+  width: 100%; height: 56px;
+  display: block;
+}
+.chart-foot {
+  display: flex; align-items: baseline; justify-content: space-between;
+  margin-top: 2px;
+  font-size: 11px;
+}
+#rateChartCurrent { font-weight: 600; font-family: var(--mono); }
+
+.stat-tile {
+  padding: 6px 10px;
+  background: var(--bg);
+  border-radius: var(--radius);
+  text-align: center;
+}
+.stat-tile .value { font-size: 18px; font-weight: 700; line-height: 1.2; }
 .stat-tile .label { font-size: 10px; text-transform: uppercase; color: var(--text-muted); letter-spacing: .4px; }
 .stat-tile.warn .value { color: var(--warn); }
 .stat-tile.danger .value { color: var(--danger); }
@@ -363,6 +403,9 @@ tbody tr.selected { background: #dbeafe; }
   .panel + .panel { border-left: none; border-top: 1px solid var(--border); }
   #detailPanel { max-height: 400px; }
 
+  .stats { grid-template-columns: 1fr; }
+  .stat-chart { height: 80px; }
+
   /* hide more columns */
   #assetTable th:nth-child(5),
   #assetTable td:nth-child(5) { display: none; }
@@ -371,9 +414,12 @@ tbody tr.selected { background: #dbeafe; }
 /* Small mobile: minimal columns */
 @media (max-width: 600px) {
   .stats {
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: 1fr;
     gap: 6px;
     padding: 8px 10px;
+  }
+  .stats-tiles {
+    grid-template-columns: repeat(3, 1fr);
   }
   .stat-tile .value { font-size: 16px; }
   .stat-tile .label { font-size: 9px; }
@@ -384,7 +430,6 @@ tbody tr.selected { background: #dbeafe; }
   table { font-size: 11px; }
   th, td { padding: 5px 6px; }
 
-  /* keep only Status, IP, MAC, Hostname */
   #assetTable th:nth-child(5),
   #assetTable td:nth-child(5),
   #assetTable th:nth-child(6),

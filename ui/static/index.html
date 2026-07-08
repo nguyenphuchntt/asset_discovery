@@ -16,7 +16,20 @@
     </div>
   </header>
 
-  <section id="statsBar" class="stats" aria-label="Runtime statistics"></section>
+  <section id="statsBar" class="stats" aria-label="Runtime statistics">
+    <div class="stats-tiles" id="statsTiles"></div>
+    <div class="stat-chart">
+      <div class="chart-label">packets / sec</div>
+      <svg id="rateChart" class="rate-chart" viewBox="0 0 200 60" preserveAspectRatio="none" aria-hidden="true">
+        <path id="rateChartArea" d="" fill="rgba(37, 99, 235, 0.15)"></path>
+        <path id="rateChartLine" d="" stroke="#2563eb" stroke-width="1.2" fill="none" stroke-linejoin="round"></path>
+      </svg>
+      <div class="chart-foot">
+        <span id="rateChartCurrent">—</span>
+        <span class="muted" id="rateChartRange"></span>
+      </div>
+    </div>
+  </section>
 
   <section class="filters" aria-label="Filters">
     <input id="qFilter" type="search" placeholder="Search MAC / IP / hostname" autocomplete="off" />

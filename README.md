@@ -104,10 +104,16 @@ sudo setcap cap_net_raw,cap_net_admin+ep bin/discovery
 
 ## Installation — Systemd (bare-metal Linux)
 
+**Prerequisites:** Go 1.21+ and `libpcap-dev` (or equivalent) must be installed first.
+
 ```bash
 cd deploy
 sudo ./install.sh            # builds binary, creates user, installs systemd unit
-sudo vi /etc/default/passivediscovery   # set DISCOVERY_INTERFACE, DISCOVERY_API_ADDR, etc.
+# The installer copies /etc/default/passivediscovery from deploy/passivediscovery.default.
+# It already contains DISCOVERY_INTERFACE=eth0 as a sensible default.
+# Change "eth0" to match your actual interface name:
+sudo sed -i 's/^DISCOVERY_INTERFACE=.*/DISCOVERY_INTERFACE=YOUR_INTERFACE/' /etc/default/passivediscovery
+# Then restart the service:
 sudo systemctl restart passivediscovery
 sudo systemctl status passivediscovery
 sudo journalctl -u passivediscovery -f
@@ -137,6 +143,7 @@ All flags accept a `DISCOVERY_*` env var equivalent. Env vars are applied first,
 | `--pcap` | — | Replay a PCAP file |
 | `--interface` | — | Live capture from interface |
 | `--bpf` | empty | BPF filter expression (e.g. `arp or port 5353`) |
+| `--promisc` | `false` | Enable promiscuous mode (required for SPAN/mirror port capture) |
 
 ### Output & logging
 | Flag | Default | Description |

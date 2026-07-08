@@ -157,7 +157,13 @@ export async function fetchUIConfig({ signal } = {}) {
     await mockDelay();
     return structuredClone(MOCK_UI_CONFIG);
   }
-  return realFetch("/ui-config", { signal });
+  // Backend doesn't expose /ui-config yet — use sensible defaults
+  // based on the standard 5s polling interval.
+  return {
+    refresh_every_ms: 5000,
+    api_base_path: "/api",
+    features: { asset_detail: true, stats: true, sse: false },
+  };
 }
 
 export async function fetchStats({ signal } = {}) {
@@ -250,7 +256,7 @@ export async function probeRealAPI() {
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 1500);
-    const res = await fetch("/api/ui-config", { signal: ctrl.signal });
+    const res = await fetch("/api/stats", { signal: ctrl.signal });
     clearTimeout(timer);
     return res.ok;
   } catch {

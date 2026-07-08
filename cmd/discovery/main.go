@@ -73,11 +73,15 @@ func run(args []string) error {
 	}
 	defer func() {
 		if cerr := source.Close(); cerr != nil {
-			logger.Warn("source close failed", slog.String("err", cerr.Error()))
+			logger.Warn("event",
+				slog.String("event", "source_close_failed"),
+				slog.String("err", cerr.Error()),
+			)
 		}
 	}()
 	// manager
 	mgrOpts := buildManagerOpts(cfg, logger)
+	mgrOpts = append(mgrOpts, asset.WithLogger(logger))
 	manager := asset.NewManager(nil, mgrOpts...)
 	// storage
 	var repo storage.Repository
@@ -109,7 +113,10 @@ func run(args []string) error {
 				)
 			}
 		} else {
-			logger.Warn("load persisted assets failed", slog.String("err", err.Error()))
+			logger.Warn("event",
+				slog.String("event", "load_assets_failed"),
+				slog.String("err", err.Error()),
+			)
 		}
 		manager.SetHydrator(sqliteRepo)
 	}
@@ -171,7 +178,10 @@ func run(args []string) error {
 			})
 			go func() {
 				if err := apiServer.Run(apiCtx); err != nil {
-					logger.Error("api server error", slog.String("err", err.Error()))
+					logger.Error("event",
+						slog.String("event", "api_error"),
+						slog.String("err", err.Error()),
+					)
 				}
 			}()
 			logger.Info("api server started",
@@ -179,7 +189,10 @@ func run(args []string) error {
 				slog.Bool("ui_enabled", cfg.UIEnabled),
 			)
 		} else {
-			logger.Warn("--api-addr set but no SQLite repo available; api disabled")
+			logger.Warn("event",
+				slog.String("event", "api_disabled_no_db"),
+				slog.String("msg", "--api-addr set but no SQLite repo available; api disabled"),
+			)
 		}
 	}
 	defer func() {
@@ -192,7 +205,10 @@ func run(args []string) error {
 	if repo != nil {
 		defer func() {
 			if err := repo.Close(); err != nil {
-				logger.Warn("repo close failed", slog.String("err", err.Error()))
+				logger.Warn("event",
+					slog.String("event", "repo_close_failed"),
+					slog.String("err", err.Error()),
+				)
 			}
 		}()
 	}
@@ -233,7 +249,10 @@ func run(args []string) error {
 
 	// done
 	if srcErr := <-sourceErr; srcErr != nil && !errors.Is(srcErr, context.Canceled) {
-		logger.Error("source terminated with error", slog.String("err", srcErr.Error()))
+		logger.Error("event",
+			slog.String("event", "source_error"),
+			slog.String("err", srcErr.Error()),
+		)
 		return srcErr
 	}
 
@@ -254,7 +273,10 @@ func run(args []string) error {
 			snapshots := manager.Snapshot()
 
 			if err := jsonSink.WriteAssets(context.Background(), snapshots); err != nil {
-				logger.Error("write assets failed", slog.String("err", err.Error()))
+				logger.Error("event",
+					slog.String("event", "json_write_failed"),
+					slog.String("err", err.Error()),
+				)
 				return err
 			}
 		}
@@ -279,7 +301,10 @@ func run(args []string) error {
 		snapshots := manager.Snapshot()
 
 		if err := jsonSink.WriteAssets(context.Background(), snapshots); err != nil {
-			logger.Error("write assets failed", slog.String("err", err.Error()))
+			logger.Error("event",
+				slog.String("event", "json_write_failed"),
+				slog.String("err", err.Error()),
+			)
 			return err
 		}
 	}
@@ -316,7 +341,10 @@ func buildManagerOpts(cfg *config.Config, logger *slog.Logger) []asset.ManagerOp
 	}
 	lookup, err := oui.LoadOUIFile(cfg.OUIPath)
 	if err != nil && lookup == nil {
-		logger.Error("failed to load OUI database", slog.String("err", err.Error()))
+		logger.Error("event",
+			slog.String("event", "oui_load_failed"),
+			slog.String("err", err.Error()),
+		)
 		return nil
 	}
 	if lookup.Len() > 0 {

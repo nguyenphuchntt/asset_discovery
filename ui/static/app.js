@@ -25,6 +25,10 @@ function cacheDOM() {
   dom.lastUpdated   = $("#lastUpdated");
   dom.refreshBtn    = $("#refreshBtn");
   dom.statsBar      = $("#statsBar");
+  dom.statsTiles    = $("#statsTiles");
+  dom.rateChartLine = $("#rateChartLine");
+  dom.rateChartArea = $("#rateChartArea");
+  dom.rateChartCur  = $("#rateChartCurrent");
   dom.qFilter       = $("#qFilter");
   dom.statusFilter  = $("#statusFilter");
   dom.vendorFilter  = $("#vendorFilter");
@@ -46,19 +50,72 @@ function cacheDOM() {
 // Render: stats strip
 // ---------------------------------------------------------------------------
 
+const ppsHistory = [];   // ring buffer of recent packets_per_sec values
+const PPS_MAX = 60;
+
 function renderStats(s) {
   if (!s) return;
+
+  // tiles (left 60%)
   const tiles = [
-    { label: "assets",       value: formatNumber(s.assets_total), cls: "" },
-    { label: "online",       value: formatNumber(s.assets_online), cls: "" },
-    { label: "offline",      value: formatNumber(s.assets_offline), cls: s.assets_offline > 0 ? "" : "" },
-    { label: "packets recv", value: formatNumber(s.packets_received), cls: "" },
-    { label: "db flush err", value: formatNumber(s.db_flush_errors), cls: s.db_flush_errors > 0 ? "warn" : "" },
-    { label: "uptime",       value: formatUptime(s.uptime_seconds), cls: "" },
+    { label: "assets",        value: formatNumber(s.assets_total) },
+    { label: "online",        value: formatNumber(s.assets_online) },
+    { label: "offline",       value: formatNumber(s.assets_offline) },
+    { label: "packets recv",  value: formatNumber(s.packets_received) },
+    { label: "packets/s",     value: formatPPS(s.packets_per_sec) },
   ];
-  dom.statsBar.innerHTML = tiles
-    .map(t => `<div class="stat-tile ${t.cls}"><div class="value">${escapeHTML(t.value)}</div><div class="label">${escapeHTML(t.label)}</div></div>`)
+  dom.statsTiles.innerHTML = tiles
+    .map(t => `<div class="stat-tile"><div class="value">${escapeHTML(t.value)}</div><div class="label">${escapeHTML(t.label)}</div></div>`)
     .join("");
+
+  // chart (right 40%)
+  ppsHistory.push(s.packets_per_sec || 0);
+  if (ppsHistory.length > PPS_MAX) ppsHistory.shift();
+  renderRateChart();
+}
+
+function formatPPS(v) {
+  if (v == null || v === 0) return "0";
+  return v < 10 ? v.toFixed(1) : Math.round(v).toString();
+}
+
+// ---------------------------------------------------------------------------
+// Render: rate sparkline (vanilla SVG)
+// ---------------------------------------------------------------------------
+
+function renderRateChart() {
+  const pts = ppsHistory;
+  if (!pts.length) return;
+
+  const W = 200;
+  const H = 56;
+  const padY = 2;
+
+  const maxVal = Math.max(1, ...pts);
+  const n = pts.length;
+
+  const step = n <= 1 ? 0 : W / (n - 1);
+
+  let lineD = "";
+  let areaD = "";
+  pts.forEach((v, i) => {
+    const x = i * step;
+    const y = H - padY - (v / maxVal) * (H - padY * 2);
+    if (i === 0) {
+      lineD += `M${x},${y}`;
+      areaD += `M${x},${H} L${x},${y}`;
+    } else {
+      lineD += ` L${x},${y}`;
+      areaD += ` L${x},${y}`;
+    }
+  });
+  areaD += ` L${(n - 1) * step},${H} Z`;
+
+  dom.rateChartLine.setAttribute("d", lineD);
+  dom.rateChartArea.setAttribute("d", areaD);
+
+  const cur = pts[pts.length - 1];
+  dom.rateChartCur.textContent = formatPPS(cur) + " pps";
 }
 
 function formatUptime(sec) {
