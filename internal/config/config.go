@@ -38,7 +38,6 @@ const (
 	IpGrace = 5 * time.Minute
 )
 
-
 var ErrHelp = flag.ErrHelp
 
 type Config struct {
@@ -47,7 +46,8 @@ type Config struct {
 	PCAPPath  string
 	Interface string
 
-	BPF string
+	BPF     string
+	Promisc bool // promiscuous mode for live capture
 
 	OutputDirectory string
 	OUIPath         string
@@ -71,11 +71,10 @@ type Config struct {
 	LoadWindow time.Duration // only load assets seen within this window (default 24h)
 	EvictAfter time.Duration // evict offline assets after this; 0 = 7×LoadWindow
 
-	// API / Dashboard
-	APIAddr        string        // bind address for HTTP server (empty = disabled)
-	UIEnabled      bool          // serve embedded dashboard at /
-	UIRefreshEvery time.Duration // dashboard polling interval (default 5s)
-	APIReadTimeout time.Duration // server read timeout (default 5s)
+	APIAddr        string
+	UIEnabled      bool
+	UIRefreshEvery time.Duration
+	APIReadTimeout time.Duration
 }
 
 func firstNonEmpty(value, fallback string) string {
@@ -93,6 +92,14 @@ func applyEnvDefaults(cfg *Config, getenv func(string) string) error {
 	cfg.PCAPPath = firstNonEmpty(getenv("DISCOVERY_PCAP"), cfg.PCAPPath)
 	cfg.Interface = firstNonEmpty(getenv("DISCOVERY_INTERFACE"), cfg.Interface)
 	cfg.BPF = firstNonEmpty(getenv("DISCOVERY_BPF"), cfg.BPF)
+	if v := strings.ToLower(strings.TrimSpace(getenv("DISCOVERY_PROMISC"))); v != "" {
+		switch v {
+		case "1", "true", "yes", "on":
+			cfg.Promisc = true
+		case "0", "false", "no", "off":
+			cfg.Promisc = false
+		}
+	}
 	cfg.OutputDirectory = firstNonEmpty(getenv("DISCOVERY_OUTPUT"), cfg.OutputDirectory)
 	cfg.OUIPath = firstNonEmpty(getenv("DISCOVERY_OUI"), cfg.OUIPath)
 	cfg.LogLevel = firstNonEmpty(getenv("DISCOVERY_LOG_LEVEL"), cfg.LogLevel)
@@ -230,7 +237,7 @@ func Parse(args []string, getenv func(string) string) (*Config, error) {
 		BatchSize:      DefaultBatchSize,
 		LoadLimit:      DefaultLoadLimit,
 		LoadWindow:     DefaultLoadWindow,
-		EvictAfter:     0, // 0 = derive 7×LoadWindow at startup
+		EvictAfter:     0,
 		UIRefreshEvery: DefaultUIRefresh,
 		APIReadTimeout: DefaultAPIReadTimeout,
 	}
@@ -245,6 +252,7 @@ func Parse(args []string, getenv func(string) string) (*Config, error) {
 	fs.StringVar(&cfg.PCAPPath, "pcap", cfg.PCAPPath, "absolute path to input PCAP file")
 	fs.StringVar(&cfg.Interface, "interface", cfg.Interface, "network interface for live capture")
 	fs.StringVar(&cfg.BPF, "bpf", cfg.BPF, "BPF filter for packet capture (empty = capture all)")
+	fs.BoolVar(&cfg.Promisc, "promisc", cfg.Promisc, "enable promiscuous mode (required for mirror/SPAN port capture)")
 	fs.StringVar(&cfg.OutputDirectory, "output", cfg.OutputDirectory, "output directory (created automatically if missing)")
 	fs.StringVar(&cfg.OUIPath, "oui", cfg.OUIPath, "path to IEEE OUI or Wireshark manuf file for MAC vendor lookup")
 	fs.StringVar(&cfg.LogLevel, "log-level", cfg.LogLevel, "log level: debug, info, warn, error")
@@ -330,7 +338,6 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("--output %q is not a directory", c.OutputDirectory)
 	}
 
-	// Persistence validation (only when --db is set).
 	if c.DBPath != "" {
 		c.DBPath = strings.TrimSpace(c.DBPath)
 		if info, err := os.Stat(c.DBPath); err == nil {
@@ -391,7 +398,6 @@ func (c *Config) Validate() error {
 	if c.APIReadTimeout < 0 {
 		return errors.New("--api-read-timeout must be >= 0")
 	}
-	// Clamp UI refresh to sensible bounds
 	if c.UIRefreshEvery > 0 && c.UIRefreshEvery < time.Second {
 		c.UIRefreshEvery = time.Second
 	}
@@ -417,7 +423,8 @@ Output:
  
 Capture options:
   --bpf         BPF filter expression. Default: empty (capture all packets).
- 
+  --promisc     Enable promiscuous mode (required for SPAN/mirror ports). Default: false.
+
 Processing options:
   --offline-after   Asset offline threshold duration. Default: 5m.
   --queue-size      Packet queue size. Default: 4096.
@@ -447,7 +454,7 @@ API / Dashboard:
 
 Environment variable:
   DISCOVERY_PCAP, DISCOVERY_INTERFACE, DISCOVERY_OUTPUT,
-  DISCOVERY_OUI, DISCOVERY_BPF, DISCOVERY_OFFLINE_AFTER,
+  DISCOVERY_OUI, DISCOVERY_BPF, DISCOVERY_PROMISC, DISCOVERY_OFFLINE_AFTER,
   DISCOVERY_LOG_LEVEL, DISCOVERY_LOG_FORMAT, DISCOVERY_LOG_OUTPUT,
   DISCOVERY_QUEUE_SIZE, DISCOVERY_WORKERS,
   DISCOVERY_FLUSH_EVERY, DISCOVERY_BATCH_SIZE,

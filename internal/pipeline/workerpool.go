@@ -22,9 +22,6 @@ func NewWorkerPool(reg *analyzer.Registry, mgr asset.AssetManager, logger *slog.
 	if logger == nil {
 		logger = slog.Default()
 	}
-	if workers <= 0 {
-		workers = 1
-	}
 	return &WorkerPool{
 		registry: reg,
 		manager:  mgr,

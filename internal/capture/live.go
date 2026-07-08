@@ -17,7 +17,7 @@ type LiveSource struct {
 	linkType layers.LinkType
 
 	snaplen int32 // snapshot length. default = 65535 (byte) = max Ethernet frame
-	promisc bool // promiscuous mode -> receive everything
+	promisc bool
 	timeout time.Duration // batching
 	bpfExpr string
 

@@ -66,9 +66,6 @@ func (l *Lookup) VendorForMAC(mac string) (string, bool) {
 		return "", false
 	}
 	for _, n := range l.prefixLens {
-		if n > len(norm) {
-			continue
-		}
 		if vendor, ok := l.entries[norm[:n]]; ok {
 			return vendor, true
 		}

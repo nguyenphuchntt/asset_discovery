@@ -21,8 +21,7 @@ func NewPipeline(reg *analyzer.Registry, mgr asset.AssetManager, logger *slog.Lo
 	return NewPipelineWithWorkers(reg, mgr, logger, 1)
 }
 
-// NewPipelineWithWorkers tạo pipeline với số workers chỉ định.
-// workers=1 chạy single-threaded loop; workers>1 delegate sang WorkerPool.
+// NewPipelineWithWorkers creates a pipeline with the specified number of workers.
 func NewPipelineWithWorkers(reg *analyzer.Registry, mgr asset.AssetManager, logger *slog.Logger, workers int) *Pipeline {
 	if logger == nil {
 		logger = slog.Default()

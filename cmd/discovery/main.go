@@ -66,11 +66,9 @@ func run(args []string) error {
 		slog.String("pcap", cfg.PCAPPath),
 		slog.String("interface", cfg.Interface),
 		slog.String("output", cfg.OutputDirectory),
-		slog.String("oui", cfg.OUIPath),
-		slog.Duration("offline_after", cfg.OfflineAfter),
 	)
 	// context
-	rootCtx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	rootCtx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM) 
 	defer cancel()
 	// open source
 	source, err := openSource(cfg, logger)
@@ -98,11 +96,11 @@ func run(args []string) error {
 			return fmt.Errorf("open sqlite: %w", err)
 		}
 		repo = sqliteRepo
-		if err := repo.Init(rootCtx); err != nil {
+		if err := repo.Init(rootCtx); err != nil { // init schema
 			repo.Close()
 			return fmt.Errorf("init storage schema: %w", err)
 		}
-		// Bounded startup load — only hot assets
+		// reload db
 		loadOpts := storage.LoadOptions{
 			Since: time.Now().Add(-cfg.LoadWindow),
 			Limit: cfg.LoadLimit,
@@ -118,11 +116,8 @@ func run(args []string) error {
 		} else {
 			logger.Warn("load persisted assets failed", slog.String("err", err.Error()))
 		}
-		// Enable on-demand hydrate for cold/evicted assets
 		manager.SetHydrator(sqliteRepo)
 	}
-
-	// Compute evictAfter: explicit flag wins, else 7× load window
 	evictAfter := cfg.EvictAfter
 	if evictAfter == 0 {
 		evictAfter = 7 * cfg.LoadWindow
@@ -135,8 +130,8 @@ func run(args []string) error {
 			FlushEvery: cfg.FlushEvery,
 		})
 		persisterCtx, persisterCancel := context.WithCancel(rootCtx)
-		go persister.Run(persisterCtx) // flush định kỳ
-		defer persisterCancel()         // cancel khi shutdown → Persister.Run tự final flush
+		go persister.Run(persisterCtx)
+		defer persisterCancel()         // cancel khi shutdown
 
 		if err := repo.SaveRunStart(rootCtx, storage.CaptureRun{
 			ID:            runID,
@@ -154,13 +149,13 @@ func run(args []string) error {
 			slog.String("run_id", runID),
 		)
 	}
-	// lifecycle tracker — periodic sweep (offline transitions) + eviction
+	// lifecycle tracker
 	lcCtx, lcCancel := context.WithCancel(rootCtx)
 	defer lcCancel()
 	tracker := lifecycle.NewTracker(manager, lifecycle.RealClock{}, sweepInterval, cfg.OfflineAfter, evictAfter, logger)
 	go tracker.Run(lcCtx)
 
-	// API server — optional, enabled by --api-addr
+	// API server
 	var apiCancel context.CancelFunc
 	if cfg.APIAddr != "" {
 		if sqlRepo, ok := repo.(*storage.SQLiteRepo); ok {
@@ -199,8 +194,7 @@ func run(args []string) error {
 		}
 	}()
 
-	// Close the SQLite repo only after the API server has stopped —
-	// the DB must stay alive while the dashboard serves queries.
+	// Close the SQLite repo only after the API server has stopped
 	if repo != nil {
 		defer func() {
 			if err := repo.Close(); err != nil {
@@ -224,11 +218,9 @@ func run(args []string) error {
 		return srcErr
 	}
 
-	// Stop lifecycle tracker before final flush
 	lcCancel()
 
-	// final sweep — synchronous (no eviction at shutdown; eviction only runs
-	// via the lifecycle tracker to keep memory bounded during long captures)
+	// final sweep
 	now := time.Now()
 	if n := manager.Sweep(now, cfg.OfflineAfter); n > 0 {
 		logger.Info("final lifecycle sweep", slog.Int("assets_marked_offline", n))
@@ -255,12 +247,7 @@ func run(args []string) error {
 		InternalDropped:  uint64(dropped),
 	}, collector, runCounts)
 
-	// PCAP replay finishes after the source is exhausted. Live capture stays
-	// running and only shuts down on Ctrl+C. For PCAP mode we keep the API/UI
-	// server alive after processing is complete so the dashboard can be
-	// inspected. The user must send SIGINT/SIGTERM (Ctrl+C) to exit.
 	if cfg.Mode == config.ModePCAP {
-		//json output (PCAP only — live mode never writes final JSON on demand)
 		if cfg.KeepJSONOutput || persister == nil {
 			jsonSink := output.NewJSONSink(cfg.OutputDirectory, logger)
 			snapshots := manager.Snapshot()
@@ -312,8 +299,11 @@ func openSource(cfg *config.Config, logger *slog.Logger) (capture.Source, error)
 		logger.Info("opening PCAP source", slog.String("path", cfg.PCAPPath))
 		return capture.NewFileSource(capture.FileOptions{Path: cfg.PCAPPath, BPF: cfg.BPF})
 	case config.ModeLive:
-		logger.Info("opening live source", slog.String("interface", cfg.Interface))
-		return capture.NewLiveSource(capture.LiveOptions{Interface: cfg.Interface, BPF: cfg.BPF})
+		logger.Info("opening live source",
+			slog.String("interface", cfg.Interface),
+			slog.Bool("promisc", cfg.Promisc),
+		)
+		return capture.NewLiveSource(capture.LiveOptions{Interface: cfg.Interface, BPF: cfg.BPF, Promisc: cfg.Promisc})
 	default:
 		return nil, fmt.Errorf("unknown mode %q", cfg.Mode)
 	}

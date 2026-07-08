@@ -102,10 +102,6 @@ func parseRegistryCSVLine(line string) (parsedEntry, error) {
 	if err != nil {
 		return parsedEntry{}, fmt.Errorf("invalid assignment %q: %w", assignment, err)
 	}
-	if !prefixMatchesRegistry(prefix, registry) {
-		return parsedEntry{}, fmt.Errorf(
-			"assignment %q has wrong nibble count for %s", assignment, registry)
-	}
 
 	vendor := cleanVendor(row[2])
 	if vendor == "" || strings.EqualFold(vendor, "Private") {
@@ -158,9 +154,6 @@ func prefixMatchesRegistry(prefix, registry string) bool {
 // convert prefix into continuously hexa chars
 func normalizePrefix(input string) (string, error) {
 	token := strings.TrimSpace(input)
-	if token == "" {
-		return "", nil
-	}
 	hex, ok := collectHex(token)
 	if !ok {
 		return "", fmt.Errorf("invalid hex in %q", input)

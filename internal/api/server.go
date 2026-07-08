@@ -8,7 +8,6 @@ import (
 	"time"
 )
 
-// Server wraps http.Server and handles graceful shutdown.
 type Server struct {
 	http   *http.Server
 	addr   string
