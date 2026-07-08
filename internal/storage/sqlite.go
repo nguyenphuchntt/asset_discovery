@@ -2,9 +2,7 @@ package storage
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,7 +14,7 @@ import (
 	"passivediscovery/internal/asset"
 )
 
-type SQLiteRepo struct { // implement repository
+type SQLiteRepo struct {
 	db *sql.DB
 }
 
@@ -57,7 +55,6 @@ func OpenSQLite(opts SQLiteOptions) (*SQLiteRepo, error) {
 	return &SQLiteRepo{db: db}, nil
 }
 
-// init: run schema
 func (r *SQLiteRepo) Init(ctx context.Context) error {
 	return initSchema(ctx, r.db)
 }
@@ -66,22 +63,20 @@ func (r *SQLiteRepo) Close() error {
 	return r.db.Close()
 }
 
-// DB returns the underlying *sql.DB, allowing ad-hoc queries from the API layer.
 func (r *SQLiteRepo) DB() *sql.DB {
 	return r.db
 }
 
-// save batch
-func (r *SQLiteRepo) SaveBatch(ctx context.Context, batch Batch) error {
-	if len(batch.Assets) == 0 && len(batch.Events) == 0 { // nothing 
+func (r *SQLiteRepo) SaveBatch(ctx context.Context, assets []asset.AssetSnapshot) error {
+	if len(assets) == 0 {
 		return nil
 	}
-	tx, err := r.db.BeginTx(ctx, nil) // begin transaction
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("storage: begin tx: %w", err)
 	}
 	defer tx.Rollback()
-	for _, s := range batch.Assets {
+	for _, s := range assets {
 		if err := upsertAsset(ctx, tx, s); err != nil {
 			return err
 		}
@@ -89,81 +84,48 @@ func (r *SQLiteRepo) SaveBatch(ctx context.Context, batch Batch) error {
 			return err
 		}
 	}
-	for _, ev := range batch.Events {
-		if err := insertEvent(ctx, tx, ev, batch.RunID); err != nil {
-			return err
-		}
-	}
 	return tx.Commit()
 }
 
-// save run stats
-func (r *SQLiteRepo) SaveRunStart(ctx context.Context, run CaptureRun) error {
-	const q = `INSERT OR REPLACE INTO capture_runs
-		(id, mode, source_name, pcap_path, interface_name, started_at, ended_at,
-		 packets_received, observations, assets_created, assets_updated,
-		 kernel_dropped, internal_dropped, errors)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-
+func (r *SQLiteRepo) SaveStatistics(ctx context.Context, s Statistics) error {
+	const q = `INSERT INTO statistics
+		(captured_at, packets_received, assets_count, packets_per_sec)
+		VALUES (?, ?, ?, ?)`
 	_, err := r.db.ExecContext(ctx, q,
-		run.ID, run.Mode, run.SourceName, nullString(run.PCAPPath),
-		nullString(run.InterfaceName), timeFmt(run.StartedAt), nullTimeStr(run.EndedAt),
-		run.PacketsReceived, run.Observations, run.AssetsCreated, run.AssetsUpdated,
-		run.KernelDropped, run.InternalDropped, run.Errors,
+		timeFmt(s.CapturedAt),
+		s.PacketsReceived,
+		s.AssetsCount,
+		s.PacketsPerSec,
 	)
 	if err != nil {
-		return fmt.Errorf("storage: save run start: %w", err)
+		return fmt.Errorf("storage: save statistics: %w", err)
 	}
 	return nil
 }
 
-// save run stats at end 
-func (r *SQLiteRepo) SaveRunEnd(ctx context.Context, run CaptureRun) error {
-	const q = `UPDATE capture_runs SET
-		ended_at = ?, packets_received = ?, observations = ?,
-		assets_created = ?, assets_updated = ?,
-		kernel_dropped = ?, internal_dropped = ?, errors = ?
-		WHERE id = ?`
-
-	_, err := r.db.ExecContext(ctx, q,
-		timeFmt(run.EndedAt),
-		run.PacketsReceived, run.Observations,
-		run.AssetsCreated, run.AssetsUpdated,
-		run.KernelDropped, run.InternalDropped, run.Errors,
-		run.ID,
+// LoadLastStatistics returns the most recent statistics row, or (zero, false, nil) when empty.
+func (r *SQLiteRepo) LoadLastStatistics(ctx context.Context) (Statistics, bool, error) {
+	const q = `SELECT captured_at, packets_received, assets_count, packets_per_sec
+		FROM statistics ORDER BY captured_at DESC LIMIT 1`
+	var s Statistics
+	var capturedAtStr string
+	err := r.db.QueryRowContext(ctx, q).Scan(
+		&capturedAtStr,
+		&s.PacketsReceived,
+		&s.AssetsCount,
+		&s.PacketsPerSec,
 	)
-	if err != nil {
-		return fmt.Errorf("storage: save run end: %w", err)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Statistics{}, false, nil
 	}
-	return nil
-}
-
-// save runtime stats
-func (r *SQLiteRepo) SaveStats(ctx context.Context, snap StatsSnapshot) error {
-	const q = `INSERT INTO runtime_stats
-		(run_id, captured_at, packets_received, observations,
-		 assets_created, assets_updated, kernel_dropped, internal_dropped,
-		 raw_queue_depth, persist_queue_depth,
-		 db_flush_count, db_flush_errors, db_flush_last_ms)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-
-	_, err := r.db.ExecContext(ctx, q,
-		snap.RunID, timeFmt(snap.CapturedAt),
-		snap.PacketsReceived, snap.Observations,
-		snap.AssetsCreated, snap.AssetsUpdated,
-		snap.KernelDropped, snap.InternalDropped,
-		snap.RawQueueDepth, snap.PersistQueueDepth,
-		snap.DBFlushCount, snap.DBFlushErrors,
-		snap.DBFlushLast.Milliseconds(),
-	)
 	if err != nil {
-		return fmt.Errorf("storage: save stats: %w", err)
+		return Statistics{}, false, fmt.Errorf("storage: load last statistics: %w", err)
 	}
-	return nil
+	s.CapturedAt, _ = parseTimeStr(sql.NullString{String: capturedAtStr, Valid: true})
+	return s, true, nil
 }
 
 // load assets bounded by Since (recency window) + Limit (hard cap).
-// Returns at most min(N within window, Limit) snapshots, ordered by last_seen DESC.
 func (r *SQLiteRepo) LoadAssets(ctx context.Context, opts LoadOptions) ([]asset.AssetSnapshot, error) {
 	args := []any{}
 	q := `SELECT id, status, mac, mac_vendor, device_type, model, os, extra_json,
@@ -187,12 +149,12 @@ func (r *SQLiteRepo) LoadAssets(ctx context.Context, opts LoadOptions) ([]asset.
 	var snapshots []asset.AssetSnapshot
 	for rows.Next() {
 		var (
-			s           asset.AssetSnapshot
-			extraJSON   sql.NullString
-			macStr      sql.NullString
+			s            asset.AssetSnapshot
+			extraJSON    sql.NullString
+			macStr       sql.NullString
 			firstSeenStr sql.NullString
 			lastSeenStr  sql.NullString
-			seenCount   uint64
+			seenCount    uint64
 		)
 		if err := rows.Scan(
 			&s.ID, &s.Status, &macStr, &s.MACVendor, &s.DeviceType, &s.Model,
@@ -231,7 +193,6 @@ func (r *SQLiteRepo) LoadAssets(ctx context.Context, opts LoadOptions) ([]asset.
 	return snapshots, nil
 }
 
-// LoadAssetByMAC fetches one asset by MAC. Returns (nil, nil) when not found.
 func (r *SQLiteRepo) LoadAssetByMAC(ctx context.Context, macStr string) (*asset.AssetSnapshot, error) {
 	if macStr == "" {
 		return nil, nil
@@ -282,7 +243,6 @@ func (r *SQLiteRepo) LoadAssetByMAC(ctx context.Context, macStr string) (*asset.
 }
 
 func upsertAsset(ctx context.Context, tx *sql.Tx, s asset.AssetSnapshot) error {
-	// cannot insert -> do update
 	const q = `INSERT INTO assets
 		(id, status, mac, mac_vendor, device_type, model, os, extra_json,
 		 first_seen, last_seen, seen_count, created_at, updated_at)
@@ -341,7 +301,6 @@ func replaceChildRows(ctx context.Context, tx *sql.Tx, s asset.AssetSnapshot) er
 		}
 	}
 
-	// asset_services — UPSERT theo (asset_id, protocol, port).
 	for _, svc := range s.Services {
 		if svc.Protocol == "" && svc.Port == 0 {
 			continue
@@ -393,53 +352,6 @@ func upsertIPRow(ctx context.Context, tx *sql.Tx, assetID, ip string, ver int, e
 	}
 	return nil
 }
-
-func insertIPRow(ctx context.Context, tx *sql.Tx, assetID, ip string, ver int, e asset.IPEntry, now string) error {
-	const q = `INSERT INTO asset_ips
-		(asset_id, ip, version, first_seen, last_seen, lease_seconds, is_active, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-	_, err := tx.ExecContext(ctx, q,
-		assetID, ip, ver,
-		timeFmt(e.FirstSeen), timeFmt(e.LastSeen),
-		int64(e.Lease.Seconds()), boolInt(e.IsActive), now,
-	)
-	if err != nil {
-		return fmt.Errorf("storage: insert IP %s/%s: %w", assetID, ip, err)
-	}
-	return nil
-}
-
-func insertEvent(ctx context.Context, tx *sql.Tx, ev asset.Event, runID string) error {
-	evID := generateEventID(ev, runID)
-	const q = `INSERT OR IGNORE INTO asset_events
-		(id, run_id, asset_id, type, at, source, detail, inserted_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-	_, err := tx.ExecContext(ctx, q,
-		evID, nullString(runID), ev.AssetID, ev.Type,
-		timeFmt(ev.At), ev.Source, ev.Detail,
-		timeFmt(time.Now().UTC()),
-	)
-	if err != nil {
-		return fmt.Errorf("storage: insert event %s: %w", evID, err)
-	}
-	return nil
-}
-
-
-// generateEventID produces a deterministic SHA256-based ID from the event fields.
-// Duplicate events with identical fields produce the same ID, enabling INSERT OR IGNORE dedup.
-func generateEventID(ev asset.Event, runID string) string {
-	h := sha256.New()
-	h.Write([]byte(string(ev.AssetID)))
-	h.Write([]byte(ev.Type))
-	h.Write([]byte(ev.At.UTC().Format(time.RFC3339Nano)))
-	h.Write([]byte(ev.Source))
-	h.Write([]byte(ev.Detail))
-	h.Write([]byte(runID))
-	return hex.EncodeToString(h.Sum(nil))
-}
-
-// loaders 
 
 func loadIPs(ctx context.Context, db *sql.DB, assetID string) (ipv4s, ipv6s map[string]asset.IPEntry, err error) {
 	const q = `SELECT ip, version, first_seen, last_seen, lease_seconds, is_active
@@ -523,9 +435,6 @@ func loadServices(ctx context.Context, db *sql.DB, assetID string) ([]asset.Serv
 	return svcs, rows.Err()
 }
 
-
-// helper
-
 func timeFmt(t time.Time) string {
 	if t.IsZero() {
 		return ""
@@ -538,13 +447,6 @@ func nullString(s string) sql.NullString {
 		return sql.NullString{}
 	}
 	return sql.NullString{String: s, Valid: true}
-}
-
-func nullTimeStr(t time.Time) sql.NullString {
-	if t.IsZero() {
-		return sql.NullString{}
-	}
-	return sql.NullString{String: t.UTC().Format(time.RFC3339Nano), Valid: true}
 }
 
 func boolInt(b bool) int {
@@ -576,6 +478,6 @@ func marshalExtras(m map[string]any) string {
 	if len(m) == 0 {
 		return ""
 	}
-	b, _ := json.Marshal(m) // encode anything into []byte contains JSON text
+	b, _ := json.Marshal(m)
 	return string(b)
 }

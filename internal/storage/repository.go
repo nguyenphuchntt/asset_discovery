@@ -10,15 +10,12 @@ type Repository interface {
 	Init(ctx context.Context) error
 	LoadAssets(ctx context.Context, opts LoadOptions) ([]asset.AssetSnapshot, error)
 	LoadAssetByMAC(ctx context.Context, mac string) (*asset.AssetSnapshot, error)
-	SaveBatch(ctx context.Context, batch Batch) error
-	SaveRunStart(ctx context.Context, run CaptureRun) error
-	SaveRunEnd(ctx context.Context, run CaptureRun) error
-	SaveStats(ctx context.Context, snapshot StatsSnapshot) error
+	LoadLastStatistics(ctx context.Context) (Statistics, bool, error)
+	SaveBatch(ctx context.Context, batch []asset.AssetSnapshot) error
+	SaveStatistics(ctx context.Context, s Statistics) error
 	Close() error
 }
 
 type Batch struct {
-	RunID  string
 	Assets []asset.AssetSnapshot
-	Events []asset.Event
 }

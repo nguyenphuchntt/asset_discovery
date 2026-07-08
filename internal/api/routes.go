@@ -11,14 +11,10 @@ import (
 func newMux(h *handler, uiEnabled bool) http.Handler {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/healthz", h.handleHealthz)
-	mux.HandleFunc("/readyz", h.handleReadyz)
-	mux.HandleFunc("/api/ui-config", h.handleUIConfig)
 	mux.HandleFunc("/api/stats", h.handleStats)
 	mux.HandleFunc("/api/assets", h.handleAssets)
 	mux.HandleFunc("/api/assets/", h.handleAssetDetail)
 	mux.HandleFunc("/api/vendors", h.handleVendors)
-	mux.HandleFunc("/api/events", h.handleEvents)
 
 	if uiEnabled {
 		mux.Handle("/", spaHandler(ui.Static))
@@ -26,7 +22,6 @@ func newMux(h *handler, uiEnabled bool) http.Handler {
 	return mux
 }
 
-// spaHandler serves static files, falling back to index.html for unknown paths.
 func spaHandler(staticFS ui.FS) http.Handler {
 	sub, _ := fs.Sub(staticFS, "static")
 	fileServer := http.FileServer(http.FS(sub))

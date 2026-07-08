@@ -53,6 +53,11 @@ func cloneIPMap(src map[string]IPEntry) map[string]IPEntry {
 	return out
 }
 
+// MergeIPMap exports mergeIPMap for use in tests (via export_test.go).
+func MergeIPMap(dst *map[string]IPEntry, src map[string]IPEntry, now time.Time) (changed bool, added []string) {
+	return mergeIPMap(dst, src, now)
+}
+
 func mergeIPMap(dst *map[string]IPEntry, src map[string]IPEntry, now time.Time) (changed bool, added []string) {
 	if len(src) == 0 {
 		return false, nil
@@ -90,6 +95,11 @@ func mergeIPMap(dst *map[string]IPEntry, src map[string]IPEntry, now time.Time) 
 	return changed, added
 }
 
+// TouchTimestamps exports touchTimestamps for use in tests.
+func TouchTimestamps(a *Asset, at time.Time) bool {
+	return touchTimestamps(a, at)
+}
+
 func touchTimestamps(a *Asset, at time.Time) bool {
 	if at.IsZero() {
 		return false
@@ -104,6 +114,11 @@ func touchTimestamps(a *Asset, at time.Time) bool {
 		changed = true
 	}
 	return changed
+}
+
+// MergeExtras exports mergeExtras for use in tests.
+func MergeExtras(dst *map[string]any, src map[string]any) bool {
+	return mergeExtras(dst, src)
 }
 
 func mergeExtras(dst *map[string]any, src map[string]any) bool {
@@ -166,6 +181,11 @@ func mergeExtras(dst *map[string]any, src map[string]any) bool {
 	return changed
 }
 
+// MergeStrings exports mergeStrings for use in tests.
+func MergeStrings(existing []string, incoming ...string) (out []string, changed bool, added []string) {
+	return mergeStrings(existing, incoming...)
+}
+
 func mergeStrings(existing []string, incoming ...string) (out []string, changed bool, added []string) {
 	seen := make(map[string]struct{}, len(existing)+len(incoming))
 	for _, v := range existing {
@@ -185,6 +205,11 @@ func mergeStrings(existing []string, incoming ...string) (out []string, changed 
 		changed = true
 	}
 	return out, changed, added
+}
+
+// MergeServices exports mergeServices for use in tests.
+func MergeServices(existing []Service, incoming ...Service) (out []Service, changed bool, added []Service) {
+	return mergeServices(existing, incoming...)
 }
 
 func mergeServices(existing []Service, incoming ...Service) (out []Service, changed bool, added []Service) {

@@ -22,12 +22,3 @@ func (m *MultiSink) WriteAssets(ctx context.Context, snapshots []asset.AssetSnap
 	}
 	return nil
 }
-
-func (m *MultiSink) WriteEvents(ctx context.Context, events []asset.Event) error {
-	for _, s := range m.sinks {
-		if err := s.WriteEvents(ctx, events); err != nil {
-			return err
-		}
-	}
-	return nil
-}

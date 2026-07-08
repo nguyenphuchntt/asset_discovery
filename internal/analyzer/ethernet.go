@@ -9,9 +9,6 @@ import (
 	"passivediscovery/internal/asset"
 )
 
-// Port-to-name mapping for common TCP/UDP services. We keep a compact
-// subset (~50 ports) that are most relevant for client-use inference.
-// Full /etc/services is not embedded to keep the binary size small.
 var commonServiceName = map[uint16]string{
 	// Web
 	80:   "http",
@@ -100,7 +97,8 @@ func guessServiceName(port uint16, protocol string) string {
 const DefaultEthernetThrottle = 60 * time.Second
 
 type EthernetAnalyzer struct {
-	lastEmit      sync.Map // map[string]time.Time — MAC → last emission wall-clock
+	lastEmit      sync.Map // map[string]time.Time — SrcMAC
+	lastDstEmit   sync.Map // map[string]time.Time — DstMAC
 	throttleAfter time.Duration
 }
 
@@ -114,36 +112,96 @@ func (e *EthernetAnalyzer) Analyze(packet gopacket.Packet) []asset.Observation {
 }
 
 func (e *EthernetAnalyzer) AnalyzeCtx(ctx *PacketCtx) []asset.Observation {
-	if ctx == nil || ctx.Ethernet == nil || !isUsableMAC(ctx.Ethernet.SrcMAC) {
+	if ctx == nil || ctx.Ethernet == nil {
 		return nil
 	}
 	eth := ctx.Ethernet
 	observedAt := ctx.ObservedAt()
+	var observations []asset.Observation
 
-	// MAC throttle — skip if we emitted for this MAC recently.
-	macKey := eth.SrcMAC.String()
-	throttled := false
-	if last, ok := e.lastEmit.Load(macKey); ok {
-		if observedAt.Sub(last.(time.Time)) < e.throttleAfter {
-			throttled = true
+	if isUsableMAC(eth.SrcMAC) {
+		macKey := eth.SrcMAC.String()
+		srcThrottled := false
+		if last, ok := e.lastEmit.Load(macKey); ok {
+			if observedAt.Sub(last.(time.Time)) < e.throttleAfter {
+				srcThrottled = true
+			}
+		}
+		if !srcThrottled {
+			e.lastEmit.Store(macKey, observedAt)
+		}
+
+		var obs asset.Observation
+		if !srcThrottled {
+			obs = asset.Observation{
+				Source:     asset.SourceEthernet,
+				ObservedAt: observedAt,
+				MAC:        asset.CloneMAC(eth.SrcMAC),
+			}
+
+			if ctx.IPv4 != nil {
+				if s := asset.NormalizeIPv4Addr(ctx.IPv4.SrcIP); s != "" {
+					obs.IPv4s = map[string]asset.IPEntry{s: {
+						FirstSeen: observedAt,
+						LastSeen:  observedAt,
+						IsActive:  true,
+					}}
+				}
+			}
+			if ctx.IPv6 != nil {
+				src := ctx.IPv6.SrcIP
+				if src != nil && !src.IsLinkLocalUnicast() {
+					if s := asset.NormalizeIPv6Addr(src); s != "" {
+						obs.IPv6s = map[string]asset.IPEntry{s: {
+							FirstSeen: observedAt,
+							LastSeen:  observedAt,
+							IsActive:  true,
+						}}
+					}
+				}
+			}
+		}
+
+		// 2) TCP SYN tracking — not throttled by SrcMAC throttle.
+		out, ok := e.detectSYN(ctx, observedAt)
+		if ok {
+			if !srcThrottled && obs.Valid() {
+				obs.Services = out
+				observations = append(observations, obs)
+			} else {
+				// Throttled SrcMAC but SYN detected — emit standalone service obs.
+				srvObs := asset.Observation{
+					Source:     asset.SourceEthernet,
+					ObservedAt: observedAt,
+					MAC:        asset.CloneMAC(eth.SrcMAC),
+					Services:   out,
+				}
+				observations = append(observations, srvObs)
+			}
+		} else if !srcThrottled && obs.Valid() {
+			observations = append(observations, obs)
 		}
 	}
-	if !throttled {
-		e.lastEmit.Store(macKey, observedAt)
-	}
 
-	// 1) Presence + IP observation (skipped when throttled).
-	var obs asset.Observation
-	if !throttled {
-		obs = asset.Observation{
+	// ── DstMAC (unicast only, separate throttle) ──────────────────────────────
+	if isUnicastMAC(eth.DstMAC) && isUsableMAC(eth.DstMAC) {
+		dstKey := eth.DstMAC.String()
+		if last, ok := e.lastDstEmit.Load(dstKey); ok {
+			if observedAt.Sub(last.(time.Time)) < e.throttleAfter {
+				goto SYN_CHECK
+			}
+		}
+		e.lastDstEmit.Store(dstKey, observedAt)
+
+		dstObs := asset.Observation{
 			Source:     asset.SourceEthernet,
 			ObservedAt: observedAt,
-			MAC:        asset.CloneMAC(eth.SrcMAC),
+			MAC:        asset.CloneMAC(eth.DstMAC),
 		}
 
 		if ctx.IPv4 != nil {
-			if s := asset.NormalizeIPv4Addr(ctx.IPv4.SrcIP); s != "" {
-				obs.IPv4s = map[string]asset.IPEntry{s: {
+			if s := asset.NormalizeIPv4Addr(ctx.IPv4.DstIP); s != "" {
+				dstObs.IPv4s = map[string]asset.IPEntry{s: {
 					FirstSeen: observedAt,
 					LastSeen:  observedAt,
 					IsActive:  true,
@@ -151,10 +209,10 @@ func (e *EthernetAnalyzer) AnalyzeCtx(ctx *PacketCtx) []asset.Observation {
 			}
 		}
 		if ctx.IPv6 != nil {
-			src := ctx.IPv6.SrcIP
-			if src != nil && !src.IsLinkLocalUnicast() {
-				if s := asset.NormalizeIPv6Addr(src); s != "" {
-					obs.IPv6s = map[string]asset.IPEntry{s: {
+			dst := ctx.IPv6.DstIP
+			if dst != nil && !dst.IsLinkLocalUnicast() {
+				if s := asset.NormalizeIPv6Addr(dst); s != "" {
+					dstObs.IPv6s = map[string]asset.IPEntry{s: {
 						FirstSeen: observedAt,
 						LastSeen:  observedAt,
 						IsActive:  true,
@@ -162,34 +220,20 @@ func (e *EthernetAnalyzer) AnalyzeCtx(ctx *PacketCtx) []asset.Observation {
 				}
 			}
 		}
+
+		if dstObs.Valid() {
+			observations = append(observations, dstObs)
+		}
 	}
 
-	// 2) TCP SYN tracking — not throttled.
-	out, ok := e.detectSYN(ctx, observedAt)
-	if ok {
-		if !throttled && obs.Valid() {
-			obs.Services = out
-			return []asset.Observation{obs}
-		}
-		// Throttled but SYN detected — emit standalone service obs.
-		srvObs := asset.Observation{
-			Source:     asset.SourceEthernet,
-			ObservedAt: observedAt,
-			MAC:        asset.CloneMAC(eth.SrcMAC),
-			Services:   out,
-		}
-		return []asset.Observation{srvObs}
-	}
-
-	if throttled || !obs.Valid() {
-		return nil
-	}
-	return []asset.Observation{obs}
+SYN_CHECK:
+	return observations
 }
 
-// Reset clears the throttle map. Useful for tests.
+// Reset clears both throttle maps. Useful for tests.
 func (e *EthernetAnalyzer) Reset() {
 	e.lastEmit = sync.Map{}
+	e.lastDstEmit = sync.Map{}
 }
 
 // detectSYN inspects a TCP SYN (not SYN-ACK) and returns a Service entry

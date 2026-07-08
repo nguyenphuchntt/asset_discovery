@@ -33,6 +33,13 @@ func isBroadcastMAC(mac []byte) bool {
 	return true
 }
 
+func isUnicastMAC(mac []byte) bool {
+	if len(mac) != 6 {
+		return false
+	}
+	return mac[0]&0x01 == 0 // bit 0 = 0 → unicast; bit 0 = 1 → multicast/broadcast
+}
+
 func isLocallyAdministeredMAC(mac []byte) bool {
 	if len(mac) < 1 {
 		return false

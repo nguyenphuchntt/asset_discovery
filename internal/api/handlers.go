@@ -28,30 +28,6 @@ type handler struct {
 	logger    Logger
 }
 
-// GET /healthz
-func (h *handler) handleHealthz(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte("ok"))
-}
-
-// GET /readyz
-func (h *handler) handleReadyz(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	if h.repo != nil && h.repo.Ready(r.Context()) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ready"))
-		return
-	}
-	w.WriteHeader(http.StatusServiceUnavailable)
-	_, _ = w.Write([]byte("not ready"))
-}
-
-// GET /api/ui-config
-func (h *handler) handleUIConfig(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, h.uiCfg)
-}
-
 // GET /api/stats
 func (h *handler) handleStats(w http.ResponseWriter, r *http.Request) {
 	uptime := int64(time.Since(h.startedAt).Seconds())
@@ -70,6 +46,7 @@ func (h *handler) handleStats(w http.ResponseWriter, r *http.Request) {
 		InternalDropped: snap.InternalDropped,
 		RawQueueDepth:   snap.RawQueueDepth,
 		DBFlushErrors:   snap.DBFlushErrors,
+		PacketsPerSec:   snap.PacketsPerSec,
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -101,7 +78,10 @@ func (h *handler) handleAssets(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := h.repo.ListAssets(ctx, filter)
 	if err != nil {
-		h.logger.Warn("ListAssets failed", slog.String("err", err.Error()))
+		h.logger.Warn("event",
+			slog.String("event", "list_assets_failed"),
+			slog.String("err", err.Error()),
+		)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
 	}
@@ -121,7 +101,11 @@ func (h *handler) handleAssetDetail(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := h.repo.GetAssetDetail(ctx, asset.AssetID(id))
 	if err != nil {
-		h.logger.Warn("GetAssetDetail failed", slog.String("err", err.Error()), slog.String("id", id))
+		h.logger.Warn("event",
+			slog.String("event", "get_asset_failed"),
+			slog.String("id", id),
+			slog.String("err", err.Error()),
+		)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
 	}
@@ -139,40 +123,14 @@ func (h *handler) handleVendors(w http.ResponseWriter, r *http.Request) {
 
 	vendors, err := h.repo.ListVendors(ctx)
 	if err != nil {
-		h.logger.Warn("ListVendors failed", slog.String("err", err.Error()))
+		h.logger.Warn("event",
+			slog.String("event", "list_vendors_failed"),
+			slog.String("err", err.Error()),
+		)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
 	}
 	writeJSON(w, http.StatusOK, VendorsResponse{Vendors: emptyIfNil(vendors)})
-}
-
-// GET /api/events
-func (h *handler) handleEvents(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	filter := EventFilter{
-		AssetID: q.Get("asset_id"),
-		Type:    q.Get("type"),
-	}
-	if v := q.Get("limit"); v != "" {
-		filter.Limit, _ = strconv.Atoi(v)
-	}
-	if v := q.Get("after"); v != "" {
-		filter.After, _ = time.Parse(time.RFC3339, v)
-	}
-	if v := q.Get("before"); v != "" {
-		filter.Before, _ = time.Parse(time.RFC3339, v)
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-	defer cancel()
-
-	resp, err := h.repo.ListEvents(ctx, filter)
-	if err != nil {
-		h.logger.Warn("ListEvents failed", slog.String("err", err.Error()))
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
-		return
-	}
-	writeJSON(w, http.StatusOK, resp)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

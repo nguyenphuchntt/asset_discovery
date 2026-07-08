@@ -31,6 +31,8 @@ type Source interface {
 
 	Run(ctx context.Context, out chan<- RawPacket) error
 
+	// Stats returns source-level capture statistics (packets read, bytes, dropped).
+	// Available after Run() completes.
 	Stats() (StatsSnapshot, error)
 
 	Close() error

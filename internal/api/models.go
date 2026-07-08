@@ -1,18 +1,19 @@
 package api
 
 type StatsResponse struct {
-	Time            string `json:"time"`
-	UptimeSeconds   int64  `json:"uptime_seconds"`
-	PacketsReceived uint64 `json:"packets_received"`
-	AssetsTotal     int    `json:"assets_total"`
-	AssetsOnline    int    `json:"assets_online"`
-	AssetsOffline   int    `json:"assets_offline"`
-	AssetsCreated   uint64 `json:"assets_created"`
-	AssetsUpdated   uint64 `json:"assets_updated"`
-	KernelDropped   uint64 `json:"kernel_dropped"`
-	InternalDropped uint64 `json:"internal_dropped"`
-	RawQueueDepth   int    `json:"raw_queue_depth"`
-	DBFlushErrors   uint64 `json:"db_flush_errors"`
+	Time            string  `json:"time"`
+	UptimeSeconds   int64   `json:"uptime_seconds"`
+	PacketsReceived uint64  `json:"packets_received"`
+	AssetsTotal     int     `json:"assets_total"`
+	AssetsOnline    int     `json:"assets_online"`
+	AssetsOffline   int     `json:"assets_offline"`
+	AssetsCreated   uint64  `json:"assets_created"`
+	AssetsUpdated   uint64  `json:"assets_updated"`
+	KernelDropped   uint64  `json:"kernel_dropped"`
+	InternalDropped uint64  `json:"internal_dropped"`
+	RawQueueDepth   int     `json:"raw_queue_depth"`
+	DBFlushErrors   uint64  `json:"db_flush_errors"`
+	PacketsPerSec   float64 `json:"packets_per_sec"`
 }
 
 type AssetListItem struct {
@@ -68,28 +69,13 @@ type ServiceEntry struct {
 	LastSeen string `json:"last_seen"`
 }
 
-type EventEntry struct {
-	ID      string `json:"id"`
-	AssetID string `json:"asset_id"`
-	Type    string `json:"type"`
-	At      string `json:"at"`
-	Source  string `json:"source"`
-	Detail  string `json:"detail"`
-}
-
 type AssetDetailResponse struct {
-	Asset        AssetIdentity    `json:"asset"`
-	IPv4History  []IPHistoryEntry `json:"ipv4_history"`
-	IPv6History  []IPHistoryEntry `json:"ipv6_history"`
-	Hostnames    []string         `json:"hostnames"`
-	Services     []ServiceEntry   `json:"services"`
-	RecentEvents []EventEntry     `json:"recent_events"`
-	Extras       map[string]any   `json:"extras"`
-}
-
-type EventListResponse struct {
-	Items []EventEntry `json:"items"`
-	Page  PageInfo     `json:"page"`
+	Asset       AssetIdentity    `json:"asset"`
+	IPv4History []IPHistoryEntry `json:"ipv4_history"`
+	IPv6History []IPHistoryEntry `json:"ipv6_history"`
+	Hostnames   []string         `json:"hostnames"`
+	Services    []ServiceEntry   `json:"services"`
+	Extras      map[string]any   `json:"extras"`
 }
 
 type VendorsResponse struct {

@@ -2,7 +2,7 @@ package asset
 
 import (
 	"context"
-	"fmt"
+	"log/slog"
 	"net"
 	"slices"
 	"strings"
@@ -11,6 +11,7 @@ import (
 	"time"
 
 	internalConfig "passivediscovery/internal/config"
+	"passivediscovery/internal/stats"
 )
 
 type VendorResolver interface {
@@ -25,11 +26,11 @@ type AssetManager interface {
 	Apply(ctx context.Context, obs Observation) (ApplyResult, error)
 	Get(id AssetID) (AssetSnapshot, bool)
 	Snapshot() []AssetSnapshot
-	Sweep(now time.Time, offlineAfter time.Duration) []Event
+	Sweep(now time.Time, offlineAfter time.Duration) int
 	EvictStale(now time.Time, evictAfter time.Duration) int
 	DrainDirty() []AssetSnapshot
-	DrainEvents() []Event
 	RecordPacket()
+	RecordDrop()
 	PacketsReceived() uint64
 }
 
@@ -51,7 +52,6 @@ const ShardCount = 16
 type shard struct {
 	mu     sync.RWMutex
 	assets map[AssetID]*Asset
-	events []Event
 	dirty  map[AssetID]struct{}
 }
 
@@ -60,7 +60,10 @@ type Manager struct {
 	resolver    *ShardedResolver
 	vendor      VendorResolver
 	hydrator    Hydrator
+	logger      *slog.Logger
 	packetsRecv atomic.Uint64
+	dropped     atomic.Uint64
+	packetRate  *stats.PacketRate
 }
 
 type ShardedResolver struct {
@@ -136,9 +139,14 @@ func WithVendorResolver(v VendorResolver) ManagerOption {
 	return func(m *Manager) { m.vendor = v }
 }
 
+func WithLogger(l *slog.Logger) ManagerOption {
+	return func(m *Manager) { m.logger = l }
+}
+
 func NewManager(_ IdentityResolver, opts ...ManagerOption) *Manager {
 	m := &Manager{
-		resolver: NewShardedResolver(),
+		resolver:  NewShardedResolver(),
+		packetRate: stats.NewPacketRate(time.Second, 60),
 	}
 	for i := range m.shards {
 		m.shards[i] = &shard{
@@ -154,8 +162,40 @@ func NewManager(_ IdentityResolver, opts ...ManagerOption) *Manager {
 
 func (m *Manager) SetHydrator(h Hydrator) { m.hydrator = h }
 
-func (m *Manager) RecordPacket()      { m.packetsRecv.Add(1) }
-func (m *Manager) PacketsReceived() uint64 { return m.packetsRecv.Load() }
+func (m *Manager) RecordPacket()          { m.packetsRecv.Add(1); m.packetRate.Inc() }
+func (m *Manager) PacketsReceived() uint64  { return m.packetsRecv.Load() }
+func (m *Manager) PacketsPerSec() float64   { return m.packetRate.Rate() }
+func (m *Manager) PacketRate() *stats.PacketRate { return m.packetRate }
+func (m *Manager) SetInitialCounters(packets uint64) { m.packetsRecv.Store(packets) }
+func (m *Manager) RecordDrop() { m.dropped.Add(1) }
+func (m *Manager) Drops() uint64 { return m.dropped.Load() }
+func (m *Manager) AssetsCount() uint64 {
+	var total uint64
+	for _, s := range m.shards {
+		s.mu.RLock()
+		total += uint64(len(s.assets))
+		s.mu.RUnlock()
+	}
+	return total
+}
+
+// StatusCounts returns (online, offline) counts by iterating the in-memory
+// map. Cheap enough at typical sizes; runs under per-shard read locks.
+func (m *Manager) StatusCounts() (online, offline int) {
+	for _, s := range m.shards {
+		s.mu.RLock()
+		for _, a := range s.assets {
+			switch a.Status {
+			case StatusOnline:
+				online++
+			case StatusOffline:
+				offline++
+			}
+		}
+		s.mu.RUnlock()
+	}
+	return
+}
 
 func (m *Manager) shardForIdx(idx int) *shard { return m.shards[idx] }
 
@@ -238,10 +278,6 @@ func (m *Manager) Apply(ctx context.Context, obs Observation) (ApplyResult, erro
 		}
 	}
 
-	emit := func(t EventType, id AssetID, detail string) {
-		sh.events = append(sh.events, newEvent(t, id, obs.ObservedAt, obs.Source, ""))
-	}
-
 	var res ApplyResult
 	switch {
 	case exists:
@@ -251,10 +287,8 @@ func (m *Manager) Apply(ctx context.Context, obs Observation) (ApplyResult, erro
 		if a.Status == StatusOffline {
 			a.Status = StatusOnline
 			mr.Changed = true
-			emit(EventStatusOnline, a.ID, "")
 		}
 		if mr.Changed {
-			m.emitFirstSeen(a.ID, mr, emit)
 			m.markDirty(sh, a.ID)
 		}
 		res.AssetID = a.ID
@@ -269,21 +303,18 @@ func (m *Manager) Apply(ctx context.Context, obs Observation) (ApplyResult, erro
 			MAC:    CloneMAC(obs.MAC),
 			Status: StatusOnline,
 		}
-		mr := m.mergeInto(a, obs)
+		m.mergeInto(a, obs)
 		sh.assets[id] = a
 		m.resolver.Bind(id, obs.MAC, idx)
 		m.markDirty(sh, id)
-		m.emitFirstSeen(id, mr, emit)
 		res.AssetID = id
 		res.Action = ActionCreated
-		emit(EventAssetCreated, id, "")
 	}
 
 	return res, nil
 }
 
 func (m *Manager) Get(id AssetID) (AssetSnapshot, bool) {
-	// Tìm shard chứa id bằng cách thử từng shard (id có thể ở shard bất kỳ).
 	for _, sh := range m.shards {
 		sh.mu.RLock()
 		if a, ok := sh.assets[id]; ok {
@@ -308,8 +339,8 @@ func (m *Manager) Snapshot() []AssetSnapshot {
 	return out
 }
 
-func (m *Manager) Sweep(now time.Time, offlineAfter time.Duration) []Event {
-	var events []Event
+func (m *Manager) Sweep(now time.Time, offlineAfter time.Duration) int {
+	transitions := 0
 	for _, sh := range m.shards {
 		sh.mu.Lock()
 		for _, a := range sh.assets {
@@ -318,9 +349,14 @@ func (m *Manager) Sweep(now time.Time, offlineAfter time.Duration) []Event {
 			if a.Status == StatusOnline && now.Sub(a.LastSeen) > offlineAfter {
 				a.Status = StatusOffline
 				changed = true
-				e := newEvent(EventStatusOffline, a.ID, now, "", "asset went offline")
-				sh.events = append(sh.events, e)
-				events = append(events, e)
+				transitions++
+				if m.logger != nil {
+					m.logger.Info("event",
+						slog.String("event", "asset_offline"),
+						slog.String("mac", a.MAC.String()),
+						slog.Time("last_seen", a.LastSeen),
+					)
+				}
 			}
 			if changed {
 				m.markDirty(sh, a.ID)
@@ -328,7 +364,7 @@ func (m *Manager) Sweep(now time.Time, offlineAfter time.Duration) []Event {
 		}
 		sh.mu.Unlock()
 	}
-	return events
+	return transitions
 }
 
 // sweepIPMap giữ nguyên — chỉ thao tác trên 1 asset, không cần external lock.
@@ -381,19 +417,7 @@ func (m *Manager) DrainDirty() []AssetSnapshot {
 	return out
 }
 
-func (m *Manager) DrainEvents() []Event {
-	var out []Event
-	for _, sh := range m.shards {
-		sh.mu.Lock()
-		out = append(out, sh.events...)
-		sh.events = nil
-		sh.mu.Unlock()
-	}
-	return out
-}
-
 func (m *Manager) LoadSnapshots(snapshots []AssetSnapshot) int {
-	// Group by shard trước để lock mỗi shard 1 lần.
 	byShard := make(map[int][]AssetSnapshot, ShardCount)
 	for _, s := range snapshots {
 		if s.ID == "" || len(s.MAC) == 0 {
@@ -427,21 +451,6 @@ func (m *Manager) markDirty(sh *shard, id AssetID) {
 		return
 	}
 	sh.dirty[id] = struct{}{}
-}
-
-func (m *Manager) emitFirstSeen(id AssetID, mr MergeResult, emit func(EventType, AssetID, string)) {
-	for _, ip := range mr.NewIPv4s {
-		emit(EventIPFirstSeen, id, "IPv4 first seen: "+ip)
-	}
-	for _, ip := range mr.NewIPv6s {
-		emit(EventIPFirstSeen, id, "IPv6 first seen: "+ip)
-	}
-	for _, h := range mr.NewHostnames {
-		emit(EventHostnameFirstSeen, id, "hostname first seen: "+h)
-	}
-	for _, s := range mr.NewServices {
-		emit(EventServiceFirstSeen, id, "service first seen: "+s.Protocol+" "+fmt.Sprintf("%d", s.Port))
-	}
 }
 
 func assetFromSnapshot(s AssetSnapshot) *Asset {

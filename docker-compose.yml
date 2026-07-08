@@ -20,9 +20,7 @@ services:
 
     # Capture from host network interface
     network_mode: host
-    cap_add:
-      - NET_RAW
-      - NET_ADMIN
+    privileged: true
 
     volumes:
       - discovery-output:/data/output

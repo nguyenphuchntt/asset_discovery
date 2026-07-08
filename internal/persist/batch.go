@@ -26,9 +26,8 @@ func defaultOptions() Options {
 
 type pendingBatch struct {
 	Assets []asset.AssetSnapshot
-	Events []asset.Event
 }
 
 func (b pendingBatch) empty() bool {
-	return len(b.Assets) == 0 && len(b.Events) == 0
+	return len(b.Assets) == 0
 }

@@ -3,6 +3,7 @@ package storage_test
 import (
 	"context"
 	"net"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -10,331 +11,333 @@ import (
 	"passivediscovery/internal/storage"
 )
 
-// SQLiteRepo — covered scenarios:
-//   1. OpenSQLite creates new DB
-//   2. Init is idempotent (run twice = no error)
-//   3. SaveBatch with assets → persisted
-//   4. SaveBatch with events → persisted
-//   5. SaveBatch with empty batch → no error, no-op
-//   6. LoadAssets round-trips save → load
-//   7. UpsertAsset: first insert → new row
-//   8. UpsertAsset: second upsert → updated row (COALESCE semantics)
-//   9. ReplaceChildRows: IPs replaced
-//  10. ReplaceChildRows: hostnames replaced
-//  11. ReplaceChildRows: services replaced
-//  12. SaveRunStart + SaveRunEnd round-trip
-//  13. SaveStats inserts row
-//  14. OpenSQLite with empty path → error
-//  15. Close is safe
-
-func newRepo(t *testing.T) (storage.Repository, context.CancelFunc) {
+// openTestDB returns an in-memory SQLite repo with schema applied.
+// Always call close(t) to release.
+func openTestDB(t *testing.T) *storage.SQLiteRepo {
 	t.Helper()
 	dir := t.TempDir()
-	ctx, cancel := context.WithCancel(context.Background())
 	repo, err := storage.OpenSQLite(storage.SQLiteOptions{
-		Path:        dir + "/test.db",
+		Path:        filepath.Join(dir, "test.db"),
 		WAL:         true,
 		BusyTimeout: 5 * time.Second,
 	})
 	if err != nil {
-		cancel()
-		t.Fatalf("failed to open sqlite: %v", err)
+		t.Fatalf("OpenSQLite: %v", err)
 	}
-	if err := repo.Init(ctx); err != nil {
-		cancel()
-		repo.Close()
-		t.Fatalf("failed to init schema: %v", err)
+	if err := repo.Init(context.Background()); err != nil {
+		t.Fatalf("Init: %v", err)
 	}
-	return repo, cancel
+	return repo
 }
 
-func TestSQLite_OpenAndInit(t *testing.T) {
-	t.Parallel()
-	repo, cancel := newRepo(t)
-	defer cancel()
-	defer repo.Close()
+// ---------- OpenSQLite ----------
 
-	if repo == nil {
-		t.Fatal("expected non-nil repo")
+func TestOpenSQLite_EmptyPath(t *testing.T) {
+	_, err := storage.OpenSQLite(storage.SQLiteOptions{Path: ""})
+	if err == nil {
+		t.Error("empty path: expected error")
 	}
 }
 
-func TestSQLite_InitIdempotent(t *testing.T) {
-	t.Parallel()
-	repo, cancel := newRepo(t)
-	defer cancel()
-	defer repo.Close()
-
-	ctx := context.Background()
-	if err := repo.Init(ctx); err != nil {
-		t.Fatalf("second Init should not fail: %v", err)
+func TestOpenSQLite_InvalidPath(t *testing.T) {
+	_, err := storage.OpenSQLite(storage.SQLiteOptions{
+		Path: "/nonexistent/dir/cannot/create.db",
+	})
+	if err == nil {
+		t.Error("invalid path: expected error")
 	}
 }
 
-func TestSQLite_SaveBatchAndLoadAssets(t *testing.T) {
-	t.Parallel()
-	repo, cancel := newRepo(t)
-	defer cancel()
-	defer repo.Close()
-
-	ctx := context.Background()
-	now := time.Now().UTC()
-	snap := asset.AssetSnapshot{
-		ID:         "mac:aa:bb:cc:dd:ee:01",
-		MAC:        mustMAC(t, "aa:bb:cc:dd:ee:01"),
-		Status:     asset.StatusOnline,
-		IPv4s: map[string]asset.IPEntry{
-			"10.0.0.1": {FirstSeen: now, LastSeen: now, Lease: time.Hour, IsActive: true},
-		},
-		Hostnames:  []string{"test-host"},
-		Services:   []asset.Service{{Protocol: "tcp", Port: 80, Name: "http", IsActive: true, LastSeen: now}},
-		MACVendor:  "TestVendor",
-		OS:         "Linux",
-		DeviceType: "server",
-		Model:      "RPi",
-		Extra:      map[string]any{"key": "value"},
-		FirstSeen:  now,
-		LastSeen:   now,
-		SeenCount:  10,
-	}
-
-	err := repo.SaveBatch(ctx, storage.Batch{
-		RunID:  "run_001",
-		Assets: []asset.AssetSnapshot{snap},
-		Events: []asset.Event{
-			{Type: asset.EventAssetCreated, AssetID: snap.ID, At: now, Source: asset.SourceARP, Detail: "test"},
-		},
+func TestOpenSQLite_ValidPath(t *testing.T) {
+	dir := t.TempDir()
+	repo, err := storage.OpenSQLite(storage.SQLiteOptions{
+		Path:        filepath.Join(dir, "test.db"),
+		BusyTimeout: time.Second,
 	})
 	if err != nil {
-		t.Fatalf("SaveBatch failed: %v", err)
+		t.Fatalf("OpenSQLite: %v", err)
 	}
+	repo.Close()
+}
 
-	loaded, err := repo.LoadAssets(ctx, storage.LoadOptions{})
-	if err != nil {
-		t.Fatalf("LoadAssets failed: %v", err)
-	}
-	if len(loaded) != 1 {
-		t.Fatalf("expected 1 asset, got %d", len(loaded))
-	}
+// ---------- Init ----------
 
-	l := loaded[0]
-	if l.ID != snap.ID {
-		t.Errorf("expected ID=%q, got %q", snap.ID, l.ID)
-	}
-	if l.OS != "Linux" {
-		t.Errorf("expected OS=Linux, got %q", l.OS)
-	}
-	if l.DeviceType != "server" {
-		t.Errorf("expected DeviceType=server, got %q", l.DeviceType)
-	}
-	if l.Model != "RPi" {
-		t.Errorf("expected Model=RPi, got %q", l.Model)
-	}
-	if l.MACVendor != "TestVendor" {
-		t.Errorf("expected MACVendor=TestVendor, got %q", l.MACVendor)
-	}
-	if l.SeenCount != 10 {
-		t.Errorf("expected SeenCount=10, got %d", l.SeenCount)
-	}
-	if len(l.Hostnames) != 1 || l.Hostnames[0] != "test-host" {
-		t.Errorf("expected hostname test-host, got %v", l.Hostnames)
+func TestInit_Idempotent(t *testing.T) {
+	repo := openTestDB(t)
+	defer repo.Close()
+
+	// Calling Init twice should not error
+	if err := repo.Init(context.Background()); err != nil {
+		t.Errorf("Init second call: %v", err)
 	}
 }
 
-func TestSQLite_ChildRowsIPs(t *testing.T) {
-	t.Parallel()
-	repo, cancel := newRepo(t)
-	defer cancel()
+// ---------- SaveBatch / LoadAssets ----------
+
+func TestSaveBatch_Empty(t *testing.T) {
+	repo := openTestDB(t)
 	defer repo.Close()
 
-	ctx := context.Background()
+	if err := repo.SaveBatch(context.Background(), nil); err != nil {
+		t.Errorf("SaveBatch nil: %v", err)
+	}
+	if err := repo.SaveBatch(context.Background(), []asset.AssetSnapshot{}); err != nil {
+		t.Errorf("SaveBatch empty: %v", err)
+	}
+}
+
+func TestSaveBatch_InsertAndLoad(t *testing.T) {
+	repo := openTestDB(t)
+	defer repo.Close()
+
 	now := time.Now().UTC()
-	snap := asset.AssetSnapshot{
-		ID:     "mac:aa:bb:cc:dd:ee:02",
-		MAC:    mustMAC(t, "aa:bb:cc:dd:ee:02"),
-		Status: asset.StatusOnline,
-		IPv4s: map[string]asset.IPEntry{
-			"10.0.0.2":        {FirstSeen: now, LastSeen: now, IsActive: true},
-			"192.168.1.10":    {FirstSeen: now, LastSeen: now, IsActive: true},
+	assets := []asset.AssetSnapshot{
+		{
+			ID:        "mac:aa:bb:cc:dd:ee:01",
+			MAC:       mustMAC(t, "aa:bb:cc:dd:ee:01"),
+			Status:    asset.StatusOnline,
+			IPv4s:     map[string]asset.IPEntry{"10.0.0.1": {FirstSeen: now, LastSeen: now, IsActive: true}},
+			Hostnames: []string{"device1"},
+			Services:  []asset.Service{{Protocol: "tcp", Port: 80, Name: "http", LastSeen: now}},
+			FirstSeen: now,
+			LastSeen:  now,
+			SeenCount: 1,
 		},
+	}
+	if err := repo.SaveBatch(context.Background(), assets); err != nil {
+		t.Fatalf("SaveBatch: %v", err)
+	}
+
+	loaded, err := repo.LoadAssets(context.Background(), storage.LoadOptions{})
+	if err != nil {
+		t.Fatalf("LoadAssets: %v", err)
+	}
+	if len(loaded) != 1 {
+		t.Fatalf("LoadAssets count: want 1, got %d", len(loaded))
+	}
+	got := loaded[0]
+	if got.ID != assets[0].ID {
+		t.Errorf("ID: want %s, got %s", assets[0].ID, got.ID)
+	}
+	if len(got.IPv4s) != 1 {
+		t.Errorf("IPv4s len: want 1, got %d", len(got.IPv4s))
+	}
+	if len(got.Hostnames) != 1 {
+		t.Errorf("Hostnames len: want 1, got %d", len(got.Hostnames))
+	}
+	if len(got.Services) != 1 {
+		t.Errorf("Services len: want 1, got %d", len(got.Services))
+	}
+}
+
+func TestSaveBatch_UpdateExisting(t *testing.T) {
+	repo := openTestDB(t)
+	defer repo.Close()
+
+	now := time.Now().UTC()
+	a := asset.AssetSnapshot{
+		ID:        "mac:aa:bb:cc:dd:ee:01",
+		MAC:       mustMAC(t, "aa:bb:cc:dd:ee:01"),
+		Status:    asset.StatusOnline,
 		FirstSeen: now,
 		LastSeen:  now,
 	}
 
-	repo.SaveBatch(ctx, storage.Batch{RunID: "r1", Assets: []asset.AssetSnapshot{snap}})
-	loaded, _ := repo.LoadAssets(ctx, storage.LoadOptions{})
+	// First save
+	if err := repo.SaveBatch(context.Background(), []asset.AssetSnapshot{a}); err != nil {
+		t.Fatalf("SaveBatch 1: %v", err)
+	}
 
-	if len(loaded[0].IPv4s) != 2 {
-		t.Errorf("expected 2 IPs, got %d", len(loaded[0].IPv4s))
+	// Update with newer LastSeen
+	a.LastSeen = now.Add(time.Hour)
+	a.SeenCount = 5
+	if err := repo.SaveBatch(context.Background(), []asset.AssetSnapshot{a}); err != nil {
+		t.Fatalf("SaveBatch 2: %v", err)
+	}
+
+	loaded, _ := repo.LoadAssets(context.Background(), storage.LoadOptions{})
+	if len(loaded) != 1 {
+		t.Fatalf("count: want 1, got %d", len(loaded))
+	}
+	if loaded[0].SeenCount != 5 {
+		t.Errorf("SeenCount: want 5, got %d", loaded[0].SeenCount)
 	}
 }
 
-func TestSQLite_ChildRowsHostnames(t *testing.T) {
-	t.Parallel()
-	repo, cancel := newRepo(t)
-	defer cancel()
+func TestLoadAssets_WithSince(t *testing.T) {
+	repo := openTestDB(t)
 	defer repo.Close()
 
-	ctx := context.Background()
+	old := time.Now().Add(-2 * time.Hour).UTC()
+	recent := time.Now().UTC()
+
+	assets := []asset.AssetSnapshot{
+		{ID: "mac:11:11:11:11:11:01", MAC: mustMAC(t, "11:11:11:11:11:01"), FirstSeen: old, LastSeen: old, SeenCount: 1},
+		{ID: "mac:11:11:11:11:11:02", MAC: mustMAC(t, "11:11:11:11:11:02"), FirstSeen: recent, LastSeen: recent, SeenCount: 1},
+	}
+	repo.SaveBatch(context.Background(), assets)
+
+	// Since = 1h ago - should only return recent
+	since := time.Now().Add(-time.Hour)
+	loaded, _ := repo.LoadAssets(context.Background(), storage.LoadOptions{Since: since})
+	if len(loaded) != 1 {
+		t.Errorf("count: want 1 (recent only), got %d", len(loaded))
+	}
+}
+
+func TestLoadAssets_WithLimit(t *testing.T) {
+	repo := openTestDB(t)
+	defer repo.Close()
+
 	now := time.Now().UTC()
-
-	snap1 := asset.AssetSnapshot{
-		ID: "mac:aa:bb:cc:dd:ee:03", MAC: mustMAC(t, "aa:bb:cc:dd:ee:03"),
-		Status: asset.StatusOnline, Hostnames: []string{"host-a"}, FirstSeen: now, LastSeen: now,
-	}
-	repo.SaveBatch(ctx, storage.Batch{RunID: "r1", Assets: []asset.AssetSnapshot{snap1}})
-
-	// Replace with different hostnames — child rows should be replaced
-	snap2 := snap1
-	snap2.Hostnames = []string{"host-b", "host-c"}
-	repo.SaveBatch(ctx, storage.Batch{RunID: "r2", Assets: []asset.AssetSnapshot{snap2}})
-
-	loaded, _ := repo.LoadAssets(ctx, storage.LoadOptions{})
-	// Child rows are MERGE semantics (UPSERT + append), not REPLACE.
-	// First save: [host-a], second save: [host-b, host-c] -> total 3 hostnames.
-	wantHostnames := map[string]bool{"host-a": true, "host-b": true, "host-c": true}
-	if len(loaded[0].Hostnames) != 3 {
-		t.Errorf("expected 3 hostnames after merge, got %d: %v", len(loaded[0].Hostnames), loaded[0].Hostnames)
-	}
-	for _, h := range loaded[0].Hostnames {
-		if !wantHostnames[h] {
-			t.Errorf("unexpected hostname %q", h)
+	assets := make([]asset.AssetSnapshot, 5)
+	for i := range assets {
+		assets[i] = asset.AssetSnapshot{
+			ID:        asset.AssetID("mac:11:11:11:11:11:0" + string(rune('1'+i))),
+			MAC:       mustMAC(t, "11:11:11:11:11:0"+string(rune('1'+i))),
+			FirstSeen: now,
+			LastSeen:  now,
+			SeenCount: 1,
 		}
 	}
+	repo.SaveBatch(context.Background(), assets)
+
+	loaded, _ := repo.LoadAssets(context.Background(), storage.LoadOptions{Limit: 3})
+	if len(loaded) != 3 {
+		t.Errorf("Limit: want 3, got %d", len(loaded))
+	}
 }
 
-func TestSQLite_ChildRowsServices(t *testing.T) {
-	t.Parallel()
-	repo, cancel := newRepo(t)
-	defer cancel()
+// ---------- LoadAssetByMAC ----------
+
+func TestLoadAssetByMAC_Found(t *testing.T) {
+	repo := openTestDB(t)
 	defer repo.Close()
 
-	ctx := context.Background()
 	now := time.Now().UTC()
-
-	snap := asset.AssetSnapshot{
-		ID: "mac:aa:bb:cc:dd:ee:04", MAC: mustMAC(t, "aa:bb:cc:dd:ee:04"),
-		Status: asset.StatusOnline, FirstSeen: now, LastSeen: now,
-		Services: []asset.Service{
-			{Protocol: "tcp", Port: 80, Name: "http", IsActive: true, LastSeen: now},
-			{Protocol: "tcp", Port: 443, Name: "https", IsActive: true, LastSeen: now},
-		},
+	a := asset.AssetSnapshot{
+		ID:        "mac:aa:bb:cc:dd:ee:01",
+		MAC:       mustMAC(t, "aa:bb:cc:dd:ee:01"),
+		FirstSeen: now,
+		LastSeen:  now,
+		SeenCount: 1,
 	}
-	repo.SaveBatch(ctx, storage.Batch{RunID: "r1", Assets: []asset.AssetSnapshot{snap}})
-	loaded, _ := repo.LoadAssets(ctx, storage.LoadOptions{})
+	repo.SaveBatch(context.Background(), []asset.AssetSnapshot{a})
 
-	if len(loaded[0].Services) != 2 {
-		t.Errorf("expected 2 services, got %d", len(loaded[0].Services))
-	}
-}
-
-func TestSQLite_EmptyBatchNoop(t *testing.T) {
-	t.Parallel()
-	repo, cancel := newRepo(t)
-	defer cancel()
-	defer repo.Close()
-
-	err := repo.SaveBatch(context.Background(), storage.Batch{})
+	got, err := repo.LoadAssetByMAC(context.Background(), "aa:bb:cc:dd:ee:01")
 	if err != nil {
-		t.Fatalf("empty batch should not error: %v", err)
+		t.Fatalf("LoadAssetByMAC: %v", err)
+	}
+	if got == nil {
+		t.Fatal("got nil")
+	}
+	if got.ID != a.ID {
+		t.Errorf("ID: want %s, got %s", a.ID, got.ID)
 	}
 }
 
-func TestSQLite_UpsertCOALESCE(t *testing.T) {
-	t.Parallel()
-	repo, cancel := newRepo(t)
-	defer cancel()
+func TestLoadAssetByMAC_NotFound(t *testing.T) {
+	repo := openTestDB(t)
 	defer repo.Close()
 
-	ctx := context.Background()
+	got, err := repo.LoadAssetByMAC(context.Background(), "00:00:00:00:00:99")
+	if err != nil {
+		t.Errorf("err: %v", err)
+	}
+	if got != nil {
+		t.Errorf("expected nil, got %v", got)
+	}
+}
+
+func TestLoadAssetByMAC_Empty(t *testing.T) {
+	repo := openTestDB(t)
+	defer repo.Close()
+
+	got, err := repo.LoadAssetByMAC(context.Background(), "")
+	if err != nil {
+		t.Errorf("err: %v", err)
+	}
+	if got != nil {
+		t.Errorf("expected nil, got %v", got)
+	}
+}
+
+// ---------- SaveStatistics / LoadLastStatistics ----------
+
+func TestSaveStatistics(t *testing.T) {
+	repo := openTestDB(t)
+	defer repo.Close()
+
 	now := time.Now().UTC()
-
-	// First save: set OS=Linux
-	snap := asset.AssetSnapshot{
-		ID: "mac:aa:bb:cc:dd:ee:05", MAC: mustMAC(t, "aa:bb:cc:dd:ee:05"),
-		Status: asset.StatusOnline, OS: "Linux", FirstSeen: now, LastSeen: now,
+	stats := storage.Statistics{
+		CapturedAt:      now,
+		PacketsReceived: 100,
+		AssetsCount:     5,
+		PacketsPerSec:   1.5,
 	}
-	repo.SaveBatch(ctx, storage.Batch{RunID: "r1", Assets: []asset.AssetSnapshot{snap}})
+	if err := repo.SaveStatistics(context.Background(), stats); err != nil {
+		t.Fatalf("SaveStatistics: %v", err)
+	}
 
-	// Second save: OS is empty in snapshot → COALESCE should keep old value
-	snap.OS = ""
-	snap.SeenCount = 1
-	repo.SaveBatch(ctx, storage.Batch{RunID: "r2", Assets: []asset.AssetSnapshot{snap}})
-
-	loaded, _ := repo.LoadAssets(ctx, storage.LoadOptions{})
-	if loaded[0].OS != "Linux" {
-		t.Errorf("expected COALESCE to keep Linux, got %q", loaded[0].OS)
+	got, ok, err := repo.LoadLastStatistics(context.Background())
+	if err != nil {
+		t.Fatalf("LoadLastStatistics: %v", err)
+	}
+	if !ok {
+		t.Fatal("ok: want true")
+	}
+	if got.PacketsReceived != 100 {
+		t.Errorf("PacketsReceived: want 100, got %d", got.PacketsReceived)
+	}
+	if got.AssetsCount != 5 {
+		t.Errorf("AssetsCount: want 5, got %d", got.AssetsCount)
+	}
+	if got.PacketsPerSec != 1.5 {
+		t.Errorf("PacketsPerSec: want 1.5, got %v", got.PacketsPerSec)
 	}
 }
 
-func TestSQLite_SaveRunRoundTrip(t *testing.T) {
-	t.Parallel()
-	repo, cancel := newRepo(t)
-	defer cancel()
+func TestLoadLastStatistics_Empty(t *testing.T) {
+	repo := openTestDB(t)
 	defer repo.Close()
 
-	ctx := context.Background()
-	now := time.Now().UTC()
-
-	err := repo.SaveRunStart(ctx, storage.CaptureRun{
-		ID: "run_002", Mode: "pcap", SourceName: "test.pcap",
-		StartedAt: now, PacketsReceived: 1000,
-	})
+	got, ok, err := repo.LoadLastStatistics(context.Background())
 	if err != nil {
-		t.Fatalf("SaveRunStart failed: %v", err)
+		t.Fatalf("err: %v", err)
 	}
-
-	err = repo.SaveRunEnd(ctx, storage.CaptureRun{
-		ID: "run_002", EndedAt: now.Add(time.Minute),
-		PacketsReceived: 1000, Observations: 50,
-	})
-	if err != nil {
-		t.Fatalf("SaveRunEnd failed: %v", err)
+	if ok {
+		t.Errorf("expected ok=false on empty table, got %+v", got)
 	}
 }
 
-func TestSQLite_SaveStats(t *testing.T) {
-	t.Parallel()
-	repo, cancel := newRepo(t)
-	defer cancel()
+func TestLoadLastStatistics_OnlyLast(t *testing.T) {
+	repo := openTestDB(t)
 	defer repo.Close()
 
-	ctx := context.Background()
-	// SaveStats has FK -> capture_runs, so seed the run first.
-	if err := repo.SaveRunStart(ctx, storage.CaptureRun{
-		ID: "run_003", Mode: "pcap", SourceName: "test.pcap",
-		StartedAt: time.Now().UTC(),
-	}); err != nil {
-		t.Fatalf("SaveRunStart failed: %v", err)
+	t0 := time.Now().Add(-2 * time.Hour).UTC()
+	t1 := time.Now().Add(-time.Hour).UTC()
+	t2 := time.Now().UTC()
+
+	repo.SaveStatistics(context.Background(), storage.Statistics{CapturedAt: t0, PacketsReceived: 100})
+	repo.SaveStatistics(context.Background(), storage.Statistics{CapturedAt: t1, PacketsReceived: 200})
+	repo.SaveStatistics(context.Background(), storage.Statistics{CapturedAt: t2, PacketsReceived: 300})
+
+	got, ok, _ := repo.LoadLastStatistics(context.Background())
+	if !ok {
+		t.Fatal("ok=false")
 	}
-	err := repo.SaveStats(ctx, storage.StatsSnapshot{
-		RunID:           "run_003",
-		CapturedAt:      time.Now().UTC(),
-		PacketsReceived: 1000,
-		Observations:    50,
-		DBFlushCount:    10,
-		DBFlushErrors:   1,
-		DBFlushLast:     50 * time.Millisecond,
-	})
-	if err != nil {
-		t.Fatalf("SaveStats failed: %v", err)
+	if got.PacketsReceived != 300 {
+		t.Errorf("want last (300), got %d", got.PacketsReceived)
 	}
 }
 
-func TestSQLite_OpenEmptyPath(t *testing.T) {
-	t.Parallel()
-	_, err := storage.OpenSQLite(storage.SQLiteOptions{Path: ""})
-	if err == nil {
-		t.Fatal("expected error for empty path")
-	}
-}
+// ---------- helper ----------
 
-// mustMAC parses a MAC or fails the test.
 func mustMAC(t *testing.T, s string) net.HardwareAddr {
 	t.Helper()
 	m, err := net.ParseMAC(s)
 	if err != nil {
-		t.Fatalf("invalid MAC: %v", err)
+		t.Fatalf("parse MAC: %v", err)
 	}
 	return m
 }

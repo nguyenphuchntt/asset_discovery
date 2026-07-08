@@ -21,14 +21,10 @@ import (
 	"passivediscovery/internal/output"
 	"passivediscovery/internal/persist"
 	"passivediscovery/internal/pipeline"
-	"passivediscovery/internal/stats"
 	"passivediscovery/internal/storage"
 )
 
-const (
-	sweepInterval = time.Minute
-	runIDTimeFmt  = "20060102T150405Z" // 06/07/2026 14:30:22 UTC
-)
+const sweepInterval = time.Minute
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -66,11 +62,9 @@ func run(args []string) error {
 		slog.String("pcap", cfg.PCAPPath),
 		slog.String("interface", cfg.Interface),
 		slog.String("output", cfg.OutputDirectory),
-		slog.String("oui", cfg.OUIPath),
-		slog.Duration("offline_after", cfg.OfflineAfter),
 	)
 	// context
-	rootCtx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	rootCtx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM) 
 	defer cancel()
 	// open source
 	source, err := openSource(cfg, logger)
@@ -79,14 +73,17 @@ func run(args []string) error {
 	}
 	defer func() {
 		if cerr := source.Close(); cerr != nil {
-			logger.Warn("source close failed", slog.String("err", cerr.Error()))
+			logger.Warn("event",
+				slog.String("event", "source_close_failed"),
+				slog.String("err", cerr.Error()),
+			)
 		}
 	}()
 	// manager
 	mgrOpts := buildManagerOpts(cfg, logger)
+	mgrOpts = append(mgrOpts, asset.WithLogger(logger))
 	manager := asset.NewManager(nil, mgrOpts...)
 	// storage
-	runID := "run_" + time.Now().UTC().Format(runIDTimeFmt) // runID
 	var repo storage.Repository
 	if cfg.DBPath != "" {
 		sqliteRepo, err := storage.OpenSQLite(storage.SQLiteOptions{
@@ -98,11 +95,11 @@ func run(args []string) error {
 			return fmt.Errorf("open sqlite: %w", err)
 		}
 		repo = sqliteRepo
-		if err := repo.Init(rootCtx); err != nil {
+		if err := repo.Init(rootCtx); err != nil { // init schema
 			repo.Close()
 			return fmt.Errorf("init storage schema: %w", err)
 		}
-		// Bounded startup load — only hot assets
+		// reload db
 		loadOpts := storage.LoadOptions{
 			Since: time.Now().Add(-cfg.LoadWindow),
 			Limit: cfg.LoadLimit,
@@ -116,51 +113,50 @@ func run(args []string) error {
 				)
 			}
 		} else {
-			logger.Warn("load persisted assets failed", slog.String("err", err.Error()))
+			logger.Warn("event",
+				slog.String("event", "load_assets_failed"),
+				slog.String("err", err.Error()),
+			)
 		}
-		// Enable on-demand hydrate for cold/evicted assets
 		manager.SetHydrator(sqliteRepo)
 	}
-
-	// Compute evictAfter: explicit flag wins, else 7× load window
 	evictAfter := cfg.EvictAfter
 	if evictAfter == 0 {
 		evictAfter = 7 * cfg.LoadWindow
 	}
-	// persister
+	// persister + statistics baseline
 	var persister *persist.Persister
 	if repo != nil {
-		persister = persist.New(repo, manager, runID, logger).SetOptions(persist.Options{
+		// load last statistics row → set packets_received baseline
+		if lastStat, ok, err := repo.LoadLastStatistics(rootCtx); err == nil && ok {
+			manager.SetInitialCounters(lastStat.PacketsReceived)
+		}
+
+		persister = persist.New(repo, manager, logger).SetOptions(persist.Options{
 			BatchSize:  cfg.BatchSize,
 			FlushEvery: cfg.FlushEvery,
-		})
-		persisterCtx, persisterCancel := context.WithCancel(rootCtx)
-		go persister.Run(persisterCtx) // flush định kỳ
-		defer persisterCancel()         // cancel khi shutdown → Persister.Run tự final flush
+		}).SetStats(manager)
 
-		if err := repo.SaveRunStart(rootCtx, storage.CaptureRun{
-			ID:            runID,
-			Mode:          string(cfg.Mode),
-			SourceName:    source.Name(),
-			PCAPPath:      cfg.PCAPPath,
-			InterfaceName: cfg.Interface,
-			StartedAt:     time.Now().UTC(),
-		}); err != nil {
-			repo.Close()
-			return fmt.Errorf("save run start: %w", err)
-		}
+		persisterCtx, persisterCancel := context.WithCancel(rootCtx)
+		go persister.Run(persisterCtx)
+		defer persisterCancel()
+
 		logger.Info("persistence enabled",
 			slog.String("db_path", cfg.DBPath),
-			slog.String("run_id", runID),
 		)
 	}
-	// lifecycle tracker — periodic sweep (offline transitions) + eviction
+	// lifecycle tracker
 	lcCtx, lcCancel := context.WithCancel(rootCtx)
 	defer lcCancel()
 	tracker := lifecycle.NewTracker(manager, lifecycle.RealClock{}, sweepInterval, cfg.OfflineAfter, evictAfter, logger)
 	go tracker.Run(lcCtx)
 
-	// API server — optional, enabled by --api-addr
+	// packet rate ring-buffer rotator (rolls the rolling 60s window every 1s)
+	prCtx, prCancel := context.WithCancel(rootCtx)
+	defer prCancel()
+	go manager.PacketRate().Run(prCtx)
+
+	// API server
 	var apiCancel context.CancelFunc
 	if cfg.APIAddr != "" {
 		if sqlRepo, ok := repo.(*storage.SQLiteRepo); ok {
@@ -182,7 +178,10 @@ func run(args []string) error {
 			})
 			go func() {
 				if err := apiServer.Run(apiCtx); err != nil {
-					logger.Error("api server error", slog.String("err", err.Error()))
+					logger.Error("event",
+						slog.String("event", "api_error"),
+						slog.String("err", err.Error()),
+					)
 				}
 			}()
 			logger.Info("api server started",
@@ -190,7 +189,10 @@ func run(args []string) error {
 				slog.Bool("ui_enabled", cfg.UIEnabled),
 			)
 		} else {
-			logger.Warn("--api-addr set but no SQLite repo available; api disabled")
+			logger.Warn("event",
+				slog.String("event", "api_disabled_no_db"),
+				slog.String("msg", "--api-addr set but no SQLite repo available; api disabled"),
+			)
 		}
 	}
 	defer func() {
@@ -199,12 +201,14 @@ func run(args []string) error {
 		}
 	}()
 
-	// Close the SQLite repo only after the API server has stopped —
-	// the DB must stay alive while the dashboard serves queries.
+	// Close the SQLite repo only after the API server has stopped
 	if repo != nil {
 		defer func() {
 			if err := repo.Close(); err != nil {
-				logger.Warn("repo close failed", slog.String("err", err.Error()))
+				logger.Warn("event",
+					slog.String("event", "repo_close_failed"),
+					slog.String("err", err.Error()),
+				)
 			}
 		}()
 	}
@@ -216,69 +220,69 @@ func run(args []string) error {
 	sourceErr := make(chan error, 1)
 	go pipeline.PumpSource(rootCtx, source, rawPackets, sourceErr)
 
+	// marker: pipeline started — before any packet is processed
+	logger.Info("pipeline_started",
+		slog.Int("workers", cfg.Workers),
+		slog.Int("queue_size", cfg.QueueSize),
+		slog.String("source_name", source.Name()),
+		slog.String("source_kind", string(source.Kind())),
+	)
+	pipelineStart := time.Now()
+
 	processed, applied, dropped := pipe.Run(rootCtx, rawPackets)
+	pipelineElapsedMS := time.Since(pipelineStart).Milliseconds()
+
+	// packets_read from capture source — read AFTER Run() so counters are final
+	var packetsRead uint64
+	if srcStats, err := source.Stats(); err == nil {
+		packetsRead = srcStats.Received
+	}
+
+	// marker: pipeline done — parseable by scripts/run_single_test.sh
+	logger.Info("pipeline_done",
+		slog.Uint64("packets_read", packetsRead),
+		slog.Int("packets_processed", processed),
+		slog.Int("observations_applied", applied),
+		slog.Int("internal_dropped", dropped),
+		slog.Int64("elapsed_ms", pipelineElapsedMS),
+	)
 
 	// done
 	if srcErr := <-sourceErr; srcErr != nil && !errors.Is(srcErr, context.Canceled) {
-		logger.Error("source terminated with error", slog.String("err", srcErr.Error()))
+		logger.Error("event",
+			slog.String("event", "source_error"),
+			slog.String("err", srcErr.Error()),
+		)
 		return srcErr
 	}
 
-	// Stop lifecycle tracker before final flush
 	lcCancel()
 
-	// final sweep — synchronous (no eviction at shutdown; eviction only runs
-	// via the lifecycle tracker to keep memory bounded during long captures)
+	// final sweep
 	now := time.Now()
-	sweepEvents := manager.Sweep(now, cfg.OfflineAfter)
-	if n := len(sweepEvents); n > 0 {
+	if n := manager.Sweep(now, cfg.OfflineAfter); n > 0 {
 		logger.Info("final lifecycle sweep", slog.Int("assets_marked_offline", n))
 	}
 
 	// final flush
-	collector := stats.NewCollector(persister)
-	runCounts := stats.RunCounts{
-		RunID:           runID,
-		PacketsReceived: uint64(processed),
-		Observations:    uint64(applied),
-		InternalDropped: uint64(dropped),
-	}
+	pipeline.ShutdownFlush(rootCtx, logger, repo, persister, manager)
 
-	pipeline.ShutdownFlush(rootCtx, logger, repo, persister, manager, storage.CaptureRun{
-		ID:               runID,
-		Mode:             string(cfg.Mode),
-		SourceName:       source.Name(),
-		PCAPPath:         cfg.PCAPPath,
-		InterfaceName:    cfg.Interface,
-		StartedAt:        time.Now().UTC(),
-		PacketsReceived:  uint64(processed),
-		Observations:     uint64(applied),
-		InternalDropped:  uint64(dropped),
-	}, collector, runCounts)
-
-	// PCAP replay finishes after the source is exhausted. Live capture stays
-	// running and only shuts down on Ctrl+C. For PCAP mode we keep the API/UI
-	// server alive after processing is complete so the dashboard can be
-	// inspected. The user must send SIGINT/SIGTERM (Ctrl+C) to exit.
 	if cfg.Mode == config.ModePCAP {
-		//json output (PCAP only — live mode never writes final JSON on demand)
 		if cfg.KeepJSONOutput || persister == nil {
 			jsonSink := output.NewJSONSink(cfg.OutputDirectory, logger)
 			snapshots := manager.Snapshot()
-			events := manager.DrainEvents()
 
 			if err := jsonSink.WriteAssets(context.Background(), snapshots); err != nil {
-				logger.Error("write assets failed", slog.String("err", err.Error()))
+				logger.Error("event",
+					slog.String("event", "json_write_failed"),
+					slog.String("err", err.Error()),
+				)
 				return err
-			}
-			if err := jsonSink.WriteEvents(context.Background(), events); err != nil {
-				logger.Error("write events failed", slog.String("err", err.Error()))
 			}
 		}
 
 		// summary
-		events := manager.DrainEvents()
-		output.NewStdoutSink().PrintSummary(manager.Snapshot(), events)
+		output.NewStdoutSink().PrintSummary(manager.Snapshot())
 
 		logger.Info("pcap processing finished; api/ui still running, press Ctrl+C to exit",
 			slog.Int("packets_processed", processed),
@@ -295,19 +299,17 @@ func run(args []string) error {
 	if cfg.KeepJSONOutput || persister == nil {
 		jsonSink := output.NewJSONSink(cfg.OutputDirectory, logger)
 		snapshots := manager.Snapshot()
-		events := manager.DrainEvents()
 
 		if err := jsonSink.WriteAssets(context.Background(), snapshots); err != nil {
-			logger.Error("write assets failed", slog.String("err", err.Error()))
+			logger.Error("event",
+				slog.String("event", "json_write_failed"),
+				slog.String("err", err.Error()),
+			)
 			return err
-		}
-		if err := jsonSink.WriteEvents(context.Background(), events); err != nil {
-			logger.Error("write events failed", slog.String("err", err.Error()))
 		}
 	}
 
-	events := manager.DrainEvents()
-	output.NewStdoutSink().PrintSummary(manager.Snapshot(), events)
+	output.NewStdoutSink().PrintSummary(manager.Snapshot())
 
 	logger.Info("discovery finished",
 		slog.Int("packets_processed", processed),
@@ -323,8 +325,11 @@ func openSource(cfg *config.Config, logger *slog.Logger) (capture.Source, error)
 		logger.Info("opening PCAP source", slog.String("path", cfg.PCAPPath))
 		return capture.NewFileSource(capture.FileOptions{Path: cfg.PCAPPath, BPF: cfg.BPF})
 	case config.ModeLive:
-		logger.Info("opening live source", slog.String("interface", cfg.Interface))
-		return capture.NewLiveSource(capture.LiveOptions{Interface: cfg.Interface, BPF: cfg.BPF})
+		logger.Info("opening live source",
+			slog.String("interface", cfg.Interface),
+			slog.Bool("promisc", cfg.Promisc),
+		)
+		return capture.NewLiveSource(capture.LiveOptions{Interface: cfg.Interface, BPF: cfg.BPF, Promisc: cfg.Promisc})
 	default:
 		return nil, fmt.Errorf("unknown mode %q", cfg.Mode)
 	}
@@ -336,7 +341,10 @@ func buildManagerOpts(cfg *config.Config, logger *slog.Logger) []asset.ManagerOp
 	}
 	lookup, err := oui.LoadOUIFile(cfg.OUIPath)
 	if err != nil && lookup == nil {
-		logger.Error("failed to load OUI database", slog.String("err", err.Error()))
+		logger.Error("event",
+			slog.String("event", "oui_load_failed"),
+			slog.String("err", err.Error()),
+		)
 		return nil
 	}
 	if lookup.Len() > 0 {

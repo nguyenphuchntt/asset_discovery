@@ -21,8 +21,7 @@ func NewPipeline(reg *analyzer.Registry, mgr asset.AssetManager, logger *slog.Lo
 	return NewPipelineWithWorkers(reg, mgr, logger, 1)
 }
 
-// NewPipelineWithWorkers tạo pipeline với số workers chỉ định.
-// workers=1 chạy single-threaded loop; workers>1 delegate sang WorkerPool.
+// NewPipelineWithWorkers creates a pipeline with the specified number of workers.
 func NewPipelineWithWorkers(reg *analyzer.Registry, mgr asset.AssetManager, logger *slog.Logger, workers int) *Pipeline {
 	if logger == nil {
 		logger = slog.Default()
@@ -61,15 +60,20 @@ func (p *Pipeline) Run(ctx context.Context, rawPackets <-chan capture.RawPacket)
 
 			observations := p.registry.Analyze(raw.Packet)
 			for _, obs := range observations {
-				if _, err := p.manager.Apply(ctx, obs); err != nil {
+				res, err := p.manager.Apply(ctx, obs)
+				if err != nil {
 					p.counters.AddDropped(1)
-					p.logger.Warn("manager.Apply failed",
+					p.manager.RecordDrop()
+					p.logger.Warn("event",
+						slog.String("event", "apply_failed"),
 						slog.String("source", string(obs.Source)),
+						slog.String("mac", obs.MAC.String()),
 						slog.String("err", err.Error()),
 					)
 					continue
 				}
 				p.counters.AddApplied(1)
+				logObservationEvent(p.logger, res, obs)
 			}
 		}
 	}

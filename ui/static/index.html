@@ -8,19 +8,31 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">passivediscovery</div>
+    <div class="brand"></div>
     <div class="status">
-      <span id="connStatus" class="badge ok">loading…</span>
       <span id="lastUpdated" class="muted">—</span>
       <span id="refreshInterval" class="muted"></span>
       <button id="refreshBtn" type="button" title="Refresh now">↻</button>
     </div>
   </header>
 
-  <section id="statsBar" class="stats" aria-label="Runtime statistics"></section>
+  <section id="statsBar" class="stats" aria-label="Runtime statistics">
+    <div class="stats-tiles" id="statsTiles"></div>
+    <div class="stat-chart">
+      <div class="chart-label">packets / sec</div>
+      <svg id="rateChart" class="rate-chart" viewBox="0 0 200 60" preserveAspectRatio="none" aria-hidden="true">
+        <path id="rateChartArea" d="" fill="rgba(37, 99, 235, 0.15)"></path>
+        <path id="rateChartLine" d="" stroke="#2563eb" stroke-width="1.2" fill="none" stroke-linejoin="round"></path>
+      </svg>
+      <div class="chart-foot">
+        <span id="rateChartCurrent">—</span>
+        <span class="muted" id="rateChartRange"></span>
+      </div>
+    </div>
+  </section>
 
   <section class="filters" aria-label="Filters">
-    <input id="qFilter" type="search" placeholder="Search MAC / IP / hostname / MAC vendor" autocomplete="off" />
+    <input id="qFilter" type="search" placeholder="Search MAC / IP / hostname" autocomplete="off" />
     <select id="statusFilter">
       <option value="">All statuses</option>
       <option value="online">online</option>
@@ -32,11 +44,11 @@
     <button id="resetFilters" type="button">Reset</button>
   </section>
 
-  <main class="layout">
-    <section class="panel" aria-label="Assets">
+  <main class="layout" id="layout">
+    <section class="panel" aria-label="Assets" id="assetsPanel">
       <div class="panel-header">
         <h2>Assets</h2>
-        <span id="assetCount" class="muted">0</span>
+        <span id="assetCount" class="muted"></span>
       </div>
       <div class="table-wrap">
         <table id="assetTable">
@@ -65,27 +77,16 @@
       </div>
     </section>
 
-    <aside class="panel" aria-label="Recent events">
+    <aside class="panel hidden" aria-label="Asset detail" id="detailPanel">
       <div class="panel-header">
-        <h2>Events</h2>
-        <span id="eventCount" class="muted">0</span>
+        <h2>Asset detail</h2>
+        <button id="closeDetail" type="button" title="Close detail">×</button>
       </div>
-      <ul id="eventList" class="events"></ul>
-      <div id="eventEmpty" class="empty hidden">No events yet.</div>
+      <div id="detailBody" class="detail-body">
+        <p class="muted detail-placeholder">Select an asset from the table to see its details.</p>
+      </div>
     </aside>
   </main>
-
-  <div id="drawer" class="drawer hidden" aria-hidden="true">
-    <div class="drawer-inner">
-      <header>
-        <h3 id="drawerTitle">asset</h3>
-        <button id="closeDrawer" type="button">×</button>
-      </header>
-      <div id="drawerBody" class="drawer-body">
-        <p class="muted">Loading…</p>
-      </div>
-    </div>
-  </div>
 
   <div id="toast" class="toast hidden" role="status"></div>
 

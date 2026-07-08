@@ -15,7 +15,16 @@ import (
 
 type Source interface {
 	DrainDirty() []asset.AssetSnapshot
-	DrainEvents() []asset.Event
+}
+
+// StatsSource provides the current counters used to populate the statistics row
+// on each flush. Optional — if nil, statistics are skipped.
+type StatsSource interface {
+	PacketsReceived() uint64
+	AssetsCount() uint64
+	PacketsPerSec() float64
+	StatusCounts() (online, offline int)
+	Drops() uint64
 }
 
 type Persister struct {
@@ -23,8 +32,7 @@ type Persister struct {
 	source Source
 	opts   Options
 	logger *slog.Logger
-
-	runID string
+	stats  StatsSource
 
 	mu     sync.Mutex
 	latest pendingBatch
@@ -34,17 +42,21 @@ type Persister struct {
 	lastFlushDur atomic.Int64 // nanoseconds
 }
 
-func New(repo storage.Repository, source Source, runID string, logger *slog.Logger) *Persister {
+func New(repo storage.Repository, source Source, logger *slog.Logger) *Persister {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &Persister{
 		repo:   repo,
 		source: source,
-		runID:  runID,
 		logger: logger.With(slog.String("component", "persist")),
 		opts:   defaultOptions(),
 	}
+}
+
+func (p *Persister) SetStats(s StatsSource) *Persister {
+	p.stats = s
+	return p
 }
 
 func (p *Persister) WithOptions(o Options) *Persister {
@@ -104,7 +116,10 @@ func (p *Persister) Run(ctx context.Context) error {
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), p.opts.FlushTimeout)
 			defer cancel()
 			if err := p.Flush(shutdownCtx); err != nil {
-				p.logger.Error("final flush failed", slog.String("err", err.Error()))
+				p.logger.Error("event",
+				slog.String("event", "flush_failed"),
+				slog.String("err", err.Error()),
+			)
 				return err
 			}
 			return nil
@@ -132,9 +147,9 @@ func (p *Persister) Flush(ctx context.Context) error {
 
 	if err := p.saveWithRetry(saveCtx, batch); err != nil {
 		p.flushErrors.Add(1)
-		p.logger.Error("persist flush ultimately failed, batch dropped",
+		p.logger.Error("event",
+			slog.String("event", "flush_failed"),
 			slog.Int("assets", len(batch.Assets)),
-			slog.Int("events", len(batch.Events)),
 			slog.String("err", err.Error()),
 		)
 		return err
@@ -143,13 +158,42 @@ func (p *Persister) Flush(ctx context.Context) error {
 	p.flushCount.Add(1)
 	dur := time.Since(start)
 	p.lastFlushDur.Store(int64(dur))
+
+	if p.stats != nil {
+		online, offline := p.stats.StatusCounts()
+		p.logger.Info("event",
+			slog.String("event", "metrics"),
+			slog.Uint64("packets", p.stats.PacketsReceived()),
+			slog.Uint64("obs", p.stats.AssetsCount()),
+			slog.Int("assets_online", online),
+			slog.Int("assets_offline", offline),
+			slog.Uint64("drops", p.stats.Drops()),
+			slog.Int64("flush_ms", dur.Milliseconds()),
+		)
+	}
+
+	// also log per-flush stats for DB monitoring
 	p.logger.Info("persist flush completed",
 		slog.Int("flush_assets", len(batch.Assets)),
-		slog.Int("flush_events", len(batch.Events)),
 		slog.Int64("flush_duration_ms", dur.Milliseconds()),
 		slog.Uint64("db_flush_count", p.flushCount.Load()),
 		slog.Uint64("db_flush_errors", p.flushErrors.Load()),
 	)
+
+	if p.stats != nil {
+		stat := storage.Statistics{
+			CapturedAt:      time.Now().UTC(),
+			PacketsReceived: p.stats.PacketsReceived(),
+			AssetsCount:     p.stats.AssetsCount(),
+			PacketsPerSec:   p.stats.PacketsPerSec(),
+		}
+		if err := p.repo.SaveStatistics(ctx, stat); err != nil {
+			p.logger.Warn("event",
+				slog.String("event", "stats_save_failed"),
+				slog.String("err", err.Error()),
+			)
+		}
+	}
 	return nil
 }
 
@@ -161,20 +205,14 @@ func (p *Persister) collectBatch(_ context.Context) (pendingBatch, error) {
 	p.latest = pendingBatch{}
 
 	assets := append(prev.Assets, p.source.DrainDirty()...)
-	events := append(prev.Events, p.source.DrainEvents()...)
 
 	if p.opts.BatchSize > 0 && len(assets) > p.opts.BatchSize {
 		overflow := assets[p.opts.BatchSize:]
 		assets = assets[:p.opts.BatchSize]
 		p.latest.Assets = overflow
 	}
-	if len(events) > p.opts.BatchSize {
-		overflow := events[p.opts.BatchSize:]
-		events = events[:p.opts.BatchSize]
-		p.latest.Events = overflow
-	}
 
-	return pendingBatch{Assets: assets, Events: events}, nil
+	return pendingBatch{Assets: assets}, nil
 }
 
 func (p *Persister) saveWithRetry(ctx context.Context, batch pendingBatch) error {
@@ -188,11 +226,7 @@ func (p *Persister) saveWithRetry(ctx context.Context, batch pendingBatch) error
 		max = 1
 	}
 	for attempt := 0; attempt < max; attempt++ {
-		err := p.repo.SaveBatch(ctx, storage.Batch{
-			RunID:  p.runID,
-			Assets: batch.Assets,
-			Events: batch.Events,
-		})
+		err := p.repo.SaveBatch(ctx, batch.Assets)
 		if err == nil {
 			return nil
 		}
@@ -200,7 +234,8 @@ func (p *Persister) saveWithRetry(ctx context.Context, batch pendingBatch) error
 		if errors.Is(err, context.Canceled) {
 			return err
 		}
-		p.logger.Warn("persist flush failed, will retry",
+		p.logger.Warn("event",
+			slog.String("event", "flush_retry"),
 			slog.Int("attempt", attempt+1),
 			slog.Int("max", max),
 			slog.String("err", err.Error()),
