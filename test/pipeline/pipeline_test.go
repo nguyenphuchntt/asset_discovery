@@ -38,6 +38,7 @@ func (m *stubManager) Apply(ctx context.Context, obs asset.Observation) (asset.A
 	return asset.ApplyResult{}, nil
 }
 func (m *stubManager) RecordPacket()                            { m.packetCount.Add(1) }
+func (m *stubManager) RecordDrop()                              {}
 func (m *stubManager) Get(id asset.AssetID) (asset.AssetSnapshot, bool) { return asset.AssetSnapshot{}, false }
 func (m *stubManager) Snapshot() []asset.AssetSnapshot          { return nil }
 func (m *stubManager) Sweep(time.Time, time.Duration) int       { return 0 }
