@@ -22,7 +22,7 @@ type UIFeatures struct {
 	AssetDetail bool `json:"asset_detail"`
 	Events      bool `json:"events"`
 	Stats       bool `json:"stats"`
-	SSE         bool `json:"sse"`
+	SSE         bool `json:"sse"` // server update UI without polling
 }
 
 type StatsSource interface {

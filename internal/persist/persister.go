@@ -17,13 +17,20 @@ type Source interface {
 	DrainDirty() []asset.AssetSnapshot
 }
 
+// StatsSource provides the current counters used to populate the statistics row
+// on each flush. Optional — if nil, statistics are skipped.
+type StatsSource interface {
+	PacketsReceived() uint64
+	AssetsCount() uint64
+	PacketsPerSec() float64
+}
+
 type Persister struct {
 	repo   storage.Repository
 	source Source
 	opts   Options
 	logger *slog.Logger
-
-	runID string
+	stats  StatsSource
 
 	mu     sync.Mutex
 	latest pendingBatch
@@ -33,17 +40,21 @@ type Persister struct {
 	lastFlushDur atomic.Int64 // nanoseconds
 }
 
-func New(repo storage.Repository, source Source, runID string, logger *slog.Logger) *Persister {
+func New(repo storage.Repository, source Source, logger *slog.Logger) *Persister {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &Persister{
 		repo:   repo,
 		source: source,
-		runID:  runID,
 		logger: logger.With(slog.String("component", "persist")),
 		opts:   defaultOptions(),
 	}
+}
+
+func (p *Persister) SetStats(s StatsSource) *Persister {
+	p.stats = s
+	return p
 }
 
 func (p *Persister) WithOptions(o Options) *Persister {
@@ -147,6 +158,18 @@ func (p *Persister) Flush(ctx context.Context) error {
 		slog.Uint64("db_flush_count", p.flushCount.Load()),
 		slog.Uint64("db_flush_errors", p.flushErrors.Load()),
 	)
+
+	if p.stats != nil {
+		stat := storage.Statistics{
+			CapturedAt:      time.Now().UTC(),
+			PacketsReceived: p.stats.PacketsReceived(),
+			AssetsCount:     p.stats.AssetsCount(),
+			PacketsPerSec:   p.stats.PacketsPerSec(),
+		}
+		if err := p.repo.SaveStatistics(ctx, stat); err != nil {
+			p.logger.Warn("save statistics failed", slog.String("err", err.Error()))
+		}
+	}
 	return nil
 }
 
@@ -179,10 +202,7 @@ func (p *Persister) saveWithRetry(ctx context.Context, batch pendingBatch) error
 		max = 1
 	}
 	for attempt := 0; attempt < max; attempt++ {
-		err := p.repo.SaveBatch(ctx, storage.Batch{
-			RunID:  p.runID,
-			Assets: batch.Assets,
-		})
+		err := p.repo.SaveBatch(ctx, batch.Assets)
 		if err == nil {
 			return nil
 		}

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	internalConfig "passivediscovery/internal/config"
+	"passivediscovery/internal/stats"
 )
 
 type VendorResolver interface {
@@ -58,6 +59,7 @@ type Manager struct {
 	vendor      VendorResolver
 	hydrator    Hydrator
 	packetsRecv atomic.Uint64
+	packetRate  *stats.PacketRate
 }
 
 type ShardedResolver struct {
@@ -135,7 +137,8 @@ func WithVendorResolver(v VendorResolver) ManagerOption {
 
 func NewManager(_ IdentityResolver, opts ...ManagerOption) *Manager {
 	m := &Manager{
-		resolver: NewShardedResolver(),
+		resolver:  NewShardedResolver(),
+		packetRate: stats.NewPacketRate(time.Second, 60),
 	}
 	for i := range m.shards {
 		m.shards[i] = &shard{
@@ -151,8 +154,20 @@ func NewManager(_ IdentityResolver, opts ...ManagerOption) *Manager {
 
 func (m *Manager) SetHydrator(h Hydrator) { m.hydrator = h }
 
-func (m *Manager) RecordPacket()         { m.packetsRecv.Add(1) }
-func (m *Manager) PacketsReceived() uint64 { return m.packetsRecv.Load() }
+func (m *Manager) RecordPacket()          { m.packetsRecv.Add(1); m.packetRate.Inc() }
+func (m *Manager) PacketsReceived() uint64  { return m.packetsRecv.Load() }
+func (m *Manager) PacketsPerSec() float64   { return m.packetRate.Rate() }
+func (m *Manager) PacketRate() *stats.PacketRate { return m.packetRate }
+func (m *Manager) SetInitialCounters(packets uint64) { m.packetsRecv.Store(packets) }
+func (m *Manager) AssetsCount() uint64 {
+	var total uint64
+	for _, s := range m.shards {
+		s.mu.RLock()
+		total += uint64(len(s.assets))
+		s.mu.RUnlock()
+	}
+	return total
+}
 
 func (m *Manager) shardForIdx(idx int) *shard { return m.shards[idx] }
 

@@ -18,6 +18,7 @@ type StatsSnapshot struct {
 	AssetsTotal     int
 	AssetsOnline    int
 	AssetsOffline   int
+	PacketsPerSec   float64
 }
 
 // PersisterStats provides the DB flush counters from the Persister.
@@ -38,8 +39,9 @@ func (s *InMemoryStats) GetStats() StatsSnapshot {
 
 	if s.Manager != nil {
 		snap.PacketsReceived = s.Manager.PacketsReceived()
+		snap.PacketsPerSec = s.Manager.PacketsPerSec()
+		snap.AssetsTotal = int(s.Manager.AssetsCount())
 		for _, a := range s.Manager.Snapshot() {
-			snap.AssetsTotal++
 			switch a.Status {
 			case asset.StatusOnline:
 				snap.AssetsOnline++

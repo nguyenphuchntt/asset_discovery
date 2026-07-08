@@ -11,9 +11,6 @@ import (
 func newMux(h *handler, uiEnabled bool) http.Handler {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/healthz", h.handleHealthz)
-	mux.HandleFunc("/readyz", h.handleReadyz)
-	mux.HandleFunc("/api/ui-config", h.handleUIConfig)
 	mux.HandleFunc("/api/stats", h.handleStats)
 	mux.HandleFunc("/api/assets", h.handleAssets)
 	mux.HandleFunc("/api/assets/", h.handleAssetDetail)

@@ -1,18 +1,19 @@
 package api
 
 type StatsResponse struct {
-	Time            string `json:"time"`
-	UptimeSeconds   int64  `json:"uptime_seconds"`
-	PacketsReceived uint64 `json:"packets_received"`
-	AssetsTotal     int    `json:"assets_total"`
-	AssetsOnline    int    `json:"assets_online"`
-	AssetsOffline   int    `json:"assets_offline"`
-	AssetsCreated   uint64 `json:"assets_created"`
-	AssetsUpdated   uint64 `json:"assets_updated"`
-	KernelDropped   uint64 `json:"kernel_dropped"`
-	InternalDropped uint64 `json:"internal_dropped"`
-	RawQueueDepth   int    `json:"raw_queue_depth"`
-	DBFlushErrors   uint64 `json:"db_flush_errors"`
+	Time            string  `json:"time"`
+	UptimeSeconds   int64   `json:"uptime_seconds"`
+	PacketsReceived uint64  `json:"packets_received"`
+	AssetsTotal     int     `json:"assets_total"`
+	AssetsOnline    int     `json:"assets_online"`
+	AssetsOffline   int     `json:"assets_offline"`
+	AssetsCreated   uint64  `json:"assets_created"`
+	AssetsUpdated   uint64  `json:"assets_updated"`
+	KernelDropped   uint64  `json:"kernel_dropped"`
+	InternalDropped uint64  `json:"internal_dropped"`
+	RawQueueDepth   int     `json:"raw_queue_depth"`
+	DBFlushErrors   uint64  `json:"db_flush_errors"`
+	PacketsPerSec   float64 `json:"packets_per_sec"`
 }
 
 type AssetListItem struct {

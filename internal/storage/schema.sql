@@ -59,41 +59,13 @@ CREATE TABLE IF NOT EXISTS asset_services (
     FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE
 );
 
--- Capture run bookkeeping -------------------------------------------------------
+-- Statistics snapshots -------------------------------------------------------
 
-CREATE TABLE IF NOT EXISTS capture_runs (
-    id TEXT PRIMARY KEY,
-    mode TEXT NOT NULL,
-    source_name TEXT NOT NULL,
-    pcap_path TEXT,
-    interface_name TEXT,
-    started_at TEXT NOT NULL,
-    ended_at TEXT,
-    packets_received INTEGER NOT NULL DEFAULT 0,
-    observations INTEGER NOT NULL DEFAULT 0,
-    assets_created INTEGER NOT NULL DEFAULT 0,
-    assets_updated INTEGER NOT NULL DEFAULT 0,
-    kernel_dropped INTEGER NOT NULL DEFAULT 0,
-    internal_dropped INTEGER NOT NULL DEFAULT 0,
-    errors INTEGER NOT NULL DEFAULT 0
-);
-
-CREATE TABLE IF NOT EXISTS runtime_stats (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_id TEXT NOT NULL,
-    captured_at TEXT NOT NULL,
+CREATE TABLE IF NOT EXISTS statistics (
+    captured_at TEXT NOT NULL PRIMARY KEY,
     packets_received INTEGER NOT NULL,
-    observations INTEGER NOT NULL,
-    assets_created INTEGER NOT NULL,
-    assets_updated INTEGER NOT NULL,
-    kernel_dropped INTEGER NOT NULL,
-    internal_dropped INTEGER NOT NULL,
-    raw_queue_depth INTEGER NOT NULL,
-    persist_queue_depth INTEGER NOT NULL,
-    db_flush_count INTEGER NOT NULL,
-    db_flush_errors INTEGER NOT NULL,
-    db_flush_last_ms INTEGER NOT NULL,
-    FOREIGN KEY (run_id) REFERENCES capture_runs(id)
+    assets_count INTEGER NOT NULL,
+    packets_per_sec REAL NOT NULL
 );
 
 -- Indexes ------------------------------------------------------------------------

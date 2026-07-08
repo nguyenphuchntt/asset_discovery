@@ -21,14 +21,10 @@ import (
 	"passivediscovery/internal/output"
 	"passivediscovery/internal/persist"
 	"passivediscovery/internal/pipeline"
-	"passivediscovery/internal/stats"
 	"passivediscovery/internal/storage"
 )
 
-const (
-	sweepInterval = time.Minute
-	runIDTimeFmt  = "20060102T150405Z" // 06/07/2026 14:30:22 UTC
-)
+const sweepInterval = time.Minute
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -84,7 +80,6 @@ func run(args []string) error {
 	mgrOpts := buildManagerOpts(cfg, logger)
 	manager := asset.NewManager(nil, mgrOpts...)
 	// storage
-	runID := "run_" + time.Now().UTC().Format(runIDTimeFmt) // runID
 	var repo storage.Repository
 	if cfg.DBPath != "" {
 		sqliteRepo, err := storage.OpenSQLite(storage.SQLiteOptions{
@@ -122,31 +117,25 @@ func run(args []string) error {
 	if evictAfter == 0 {
 		evictAfter = 7 * cfg.LoadWindow
 	}
-	// persister
+	// persister + statistics baseline
 	var persister *persist.Persister
 	if repo != nil {
-		persister = persist.New(repo, manager, runID, logger).SetOptions(persist.Options{
+		// load last statistics row → set packets_received baseline
+		if lastStat, ok, err := repo.LoadLastStatistics(rootCtx); err == nil && ok {
+			manager.SetInitialCounters(lastStat.PacketsReceived)
+		}
+
+		persister = persist.New(repo, manager, logger).SetOptions(persist.Options{
 			BatchSize:  cfg.BatchSize,
 			FlushEvery: cfg.FlushEvery,
-		})
+		}).SetStats(manager)
+
 		persisterCtx, persisterCancel := context.WithCancel(rootCtx)
 		go persister.Run(persisterCtx)
-		defer persisterCancel()         // cancel khi shutdown
+		defer persisterCancel()
 
-		if err := repo.SaveRunStart(rootCtx, storage.CaptureRun{
-			ID:            runID,
-			Mode:          string(cfg.Mode),
-			SourceName:    source.Name(),
-			PCAPPath:      cfg.PCAPPath,
-			InterfaceName: cfg.Interface,
-			StartedAt:     time.Now().UTC(),
-		}); err != nil {
-			repo.Close()
-			return fmt.Errorf("save run start: %w", err)
-		}
 		logger.Info("persistence enabled",
 			slog.String("db_path", cfg.DBPath),
-			slog.String("run_id", runID),
 		)
 	}
 	// lifecycle tracker
@@ -154,6 +143,11 @@ func run(args []string) error {
 	defer lcCancel()
 	tracker := lifecycle.NewTracker(manager, lifecycle.RealClock{}, sweepInterval, cfg.OfflineAfter, evictAfter, logger)
 	go tracker.Run(lcCtx)
+
+	// packet rate ring-buffer rotator (rolls the rolling 60s window every 1s)
+	prCtx, prCancel := context.WithCancel(rootCtx)
+	defer prCancel()
+	go manager.PacketRate().Run(prCtx)
 
 	// API server
 	var apiCancel context.CancelFunc
@@ -210,7 +204,32 @@ func run(args []string) error {
 	sourceErr := make(chan error, 1)
 	go pipeline.PumpSource(rootCtx, source, rawPackets, sourceErr)
 
+	// marker: pipeline started — before any packet is processed
+	logger.Info("pipeline_started",
+		slog.Int("workers", cfg.Workers),
+		slog.Int("queue_size", cfg.QueueSize),
+		slog.String("source_name", source.Name()),
+		slog.String("source_kind", string(source.Kind())),
+	)
+	pipelineStart := time.Now()
+
 	processed, applied, dropped := pipe.Run(rootCtx, rawPackets)
+	pipelineElapsedMS := time.Since(pipelineStart).Milliseconds()
+
+	// packets_read from capture source — read AFTER Run() so counters are final
+	var packetsRead uint64
+	if srcStats, err := source.Stats(); err == nil {
+		packetsRead = srcStats.Received
+	}
+
+	// marker: pipeline done — parseable by scripts/run_single_test.sh
+	logger.Info("pipeline_done",
+		slog.Uint64("packets_read", packetsRead),
+		slog.Int("packets_processed", processed),
+		slog.Int("observations_applied", applied),
+		slog.Int("internal_dropped", dropped),
+		slog.Int64("elapsed_ms", pipelineElapsedMS),
+	)
 
 	// done
 	if srcErr := <-sourceErr; srcErr != nil && !errors.Is(srcErr, context.Canceled) {
@@ -227,25 +246,7 @@ func run(args []string) error {
 	}
 
 	// final flush
-	collector := stats.NewCollector(persister)
-	runCounts := stats.RunCounts{
-		RunID:           runID,
-		PacketsReceived: uint64(processed),
-		Observations:    uint64(applied),
-		InternalDropped: uint64(dropped),
-	}
-
-	pipeline.ShutdownFlush(rootCtx, logger, repo, persister, manager, storage.CaptureRun{
-		ID:               runID,
-		Mode:             string(cfg.Mode),
-		SourceName:       source.Name(),
-		PCAPPath:         cfg.PCAPPath,
-		InterfaceName:    cfg.Interface,
-		StartedAt:        time.Now().UTC(),
-		PacketsReceived:  uint64(processed),
-		Observations:     uint64(applied),
-		InternalDropped:  uint64(dropped),
-	}, collector, runCounts)
+	pipeline.ShutdownFlush(rootCtx, logger, repo, persister, manager)
 
 	if cfg.Mode == config.ModePCAP {
 		if cfg.KeepJSONOutput || persister == nil {

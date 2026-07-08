@@ -9,6 +9,11 @@ if [[ $EUID -ne 0 ]]; then
     exit 1
 fi
 
+if ! command -v go >/dev/null 2>&1; then
+    echo "ERROR: Go is not installed. Install Go 1.21+ first: https://go.dev/doc/install" >&2
+    exit 1
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 

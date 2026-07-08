@@ -16,7 +16,6 @@ import (
 	"passivediscovery/internal/capture"
 	"passivediscovery/internal/persist"
 	"passivediscovery/internal/pipeline"
-	"passivediscovery/internal/stats"
 	"passivediscovery/internal/storage"
 )
 
@@ -102,46 +101,34 @@ func newLogger() *slog.Logger {
 // ---------------------------------------------------------------------------
 
 type stubRepo struct {
-	saveRunEndCalls int
-	saveRunEndErr   error
-	saveStatsCalls  int
-	saveStatsErr    error
+	saveBatchCalls int
+	saveBatchErr   error
 }
 
 func (r *stubRepo) Init(ctx context.Context) error                                { return nil }
 func (r *stubRepo) LoadAssets(ctx context.Context, opts storage.LoadOptions) ([]asset.AssetSnapshot, error) { return nil, nil }
 func (r *stubRepo) LoadAssetByMAC(ctx context.Context, mac string) (*asset.AssetSnapshot, error) { return nil, nil }
-func (r *stubRepo) SaveBatch(ctx context.Context, batch storage.Batch) error     { return nil }
-func (r *stubRepo) SaveRunStart(ctx context.Context, run storage.CaptureRun) error { return nil }
-func (r *stubRepo) SaveRunEnd(ctx context.Context, run storage.CaptureRun) error {
-	r.saveRunEndCalls++
-	return r.saveRunEndErr
+func (r *stubRepo) SaveBatch(ctx context.Context, assets []asset.AssetSnapshot) error {
+	r.saveBatchCalls++
+	return r.saveBatchErr
 }
-func (r *stubRepo) SaveStats(ctx context.Context, snapshot storage.StatsSnapshot) error {
-	r.saveStatsCalls++
-	return r.saveStatsErr
+func (r *stubRepo) SaveStatistics(ctx context.Context, s storage.Statistics) error { return nil }
+func (r *stubRepo) LoadLastStatistics(ctx context.Context) (storage.Statistics, bool, error) {
+	return storage.Statistics{}, false, nil
 }
 func (r *stubRepo) Close() error                                                  { return nil }
-
-type stubStatsPersister struct {
-	count uint64
-	err   uint64
-	last  time.Duration
-}
-
-func (p *stubStatsPersister) Counters() (uint64, uint64, time.Duration) {
-	return p.count, p.err, p.last
-}
 
 var _ persist.Source = (*stubSourceFlush)(nil)
 
 type stubSourceFlush struct{}
 
-func (s *stubSourceFlush) DrainDirty() []asset.AssetSnapshot { return nil }
+func (s *stubSourceFlush) DrainDirty() []asset.AssetSnapshot {
+	return []asset.AssetSnapshot{{ID: "test-asset-1"}}
+}
 
 func newRealPersister(t *testing.T, repo *stubRepo) *persist.Persister {
 	t.Helper()
-	return persist.New(repo, &stubSourceFlush{}, "test-run", newLogger())
+	return persist.New(repo, &stubSourceFlush{}, newLogger())
 }
 
 // ---------------------------------------------------------------------------
@@ -150,79 +137,36 @@ func newRealPersister(t *testing.T, repo *stubRepo) *persist.Persister {
 
 func TestShutdownFlush_NilPersister(t *testing.T) {
 	repo := &stubRepo{}
-	collector := stats.NewCollector(nil)
-	runCounts := stats.RunCounts{RunID: "shutdown-test"}
-	run := storage.CaptureRun{ID: "shutdown-test"}
+	pipeline.ShutdownFlush(context.Background(), newLogger(), repo, nil, nil)
 
-	pipeline.ShutdownFlush(context.Background(), newLogger(), repo, nil, nil, run, collector, runCounts)
-
-	if repo.saveRunEndCalls != 0 { t.Errorf("expected 0 SaveRunEnd calls, got %d", repo.saveRunEndCalls) }
-	if repo.saveStatsCalls  != 0 { t.Errorf("expected 0 SaveStats calls, got %d", repo.saveStatsCalls) }
+	if repo.saveBatchCalls != 0 { t.Errorf("expected 0 SaveBatch calls, got %d", repo.saveBatchCalls) }
 }
 
 func TestShutdownFlush_FlushSuccess(t *testing.T) {
 	repo := &stubRepo{}
 	p := newRealPersister(t, repo)
-	collector := stats.NewCollector(nil)
-	runCounts := stats.RunCounts{RunID: "shutdown-1", PacketsReceived: 100}
-	run := storage.CaptureRun{ID: "shutdown-1", StartedAt: time.Now()}
 
-	pipeline.ShutdownFlush(context.Background(), newLogger(), repo, p, nil, run, collector, runCounts)
+	pipeline.ShutdownFlush(context.Background(), newLogger(), repo, p, nil)
 
-	if repo.saveRunEndCalls != 1 { t.Errorf("expected 1 SaveRunEnd call, got %d", repo.saveRunEndCalls) }
-	if repo.saveStatsCalls  != 1 { t.Errorf("expected 1 SaveStats call, got %d", repo.saveStatsCalls) }
+	if repo.saveBatchCalls != 1 { t.Errorf("expected 1 SaveBatch call, got %d", repo.saveBatchCalls) }
 }
 
 func TestShutdownFlush_FlushError_LogAndContinue(t *testing.T) {
-	// repo that fails on SaveBatch (called inside Flush) → Flush returns error, but SaveRunEnd/SaveStats still run
 	repo := &stubRepo{}
 	p := newRealPersister(t, repo)
-	collector := stats.NewCollector(nil)
-	runCounts := stats.RunCounts{RunID: "shutdown-fail"}
-	run := storage.CaptureRun{ID: "shutdown-fail"}
 
-	pipeline.ShutdownFlush(context.Background(), newLogger(), repo, p, nil, run, collector, runCounts)
-
-	if repo.saveRunEndCalls != 1 { t.Errorf("expected 1 SaveRunEnd call after flush error, got %d", repo.saveRunEndCalls) }
-	if repo.saveStatsCalls  != 1 { t.Errorf("expected 1 SaveStats call after flush error, got %d", repo.saveStatsCalls) }
-}
-
-func TestShutdownFlush_SaveRunEndError_LogAndContinue(t *testing.T) {
-	repo := &stubRepo{saveRunEndErr: context.DeadlineExceeded}
-	p := newRealPersister(t, repo)
-	collector := stats.NewCollector(nil)
-	runCounts := stats.RunCounts{RunID: "save-runend-fail"}
-	run := storage.CaptureRun{ID: "save-runend-fail"}
-
-	pipeline.ShutdownFlush(context.Background(), newLogger(), repo, p, nil, run, collector, runCounts)
-
-	if repo.saveRunEndCalls != 1 { t.Errorf("expected 1 SaveRunEnd call, got %d", repo.saveRunEndCalls) }
-	if repo.saveStatsCalls  != 1 { t.Errorf("expected 1 SaveStats call even after SaveRunEnd error, got %d", repo.saveStatsCalls) }
-}
-
-func TestShutdownFlush_CollectorWithPersisterStats(t *testing.T) {
-	repo := &stubRepo{}
-	p := newRealPersister(t, repo)
-	statPersister := &stubStatsPersister{count: 7, err: 1, last: 25 * time.Millisecond}
-	collector := stats.NewCollector(statPersister)
-	runCounts := stats.RunCounts{RunID: "collector-with-persister", PacketsReceived: 500}
-	run := storage.CaptureRun{ID: "collector-with-persister"}
-
-	pipeline.ShutdownFlush(context.Background(), newLogger(), repo, p, nil, run, collector, runCounts)
-
-	if repo.saveStatsCalls != 1 { t.Errorf("expected 1 SaveStats call, got %d", repo.saveStatsCalls) }
+	// Flush logs error but ShutdownFlush still returns; no more calls expected
+	pipeline.ShutdownFlush(context.Background(), newLogger(), repo, p, nil)
 }
 
 func TestShutdownFlush_NilLogger(t *testing.T) {
 	repo := &stubRepo{}
 	p := newRealPersister(t, repo)
-	collector := stats.NewCollector(nil)
-	runCounts := stats.RunCounts{RunID: "nil-logger"}
-	run := storage.CaptureRun{ID: "nil-logger"}
 
-	pipeline.ShutdownFlush(context.Background(), nil, repo, p, nil, run, collector, runCounts)
+	// Should not panic with nil logger
+	pipeline.ShutdownFlush(context.Background(), nil, repo, p, nil)
 
-	if repo.saveRunEndCalls != 1 { t.Errorf("expected 1 SaveRunEnd call, got %d", repo.saveRunEndCalls) }
+	if repo.saveBatchCalls != 1 { t.Errorf("expected 1 SaveBatch call, got %d", repo.saveBatchCalls) }
 }
 
 func TestCounters_SnapshotZero(t *testing.T) {

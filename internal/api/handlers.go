@@ -28,30 +28,6 @@ type handler struct {
 	logger    Logger
 }
 
-// GET /healthz
-func (h *handler) handleHealthz(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte("ok"))
-}
-
-// GET /readyz
-func (h *handler) handleReadyz(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	if h.repo != nil && h.repo.Ready(r.Context()) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ready"))
-		return
-	}
-	w.WriteHeader(http.StatusServiceUnavailable)
-	_, _ = w.Write([]byte("not ready"))
-}
-
-// GET /api/ui-config
-func (h *handler) handleUIConfig(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, h.uiCfg)
-}
-
 // GET /api/stats
 func (h *handler) handleStats(w http.ResponseWriter, r *http.Request) {
 	uptime := int64(time.Since(h.startedAt).Seconds())
@@ -70,6 +46,7 @@ func (h *handler) handleStats(w http.ResponseWriter, r *http.Request) {
 		InternalDropped: snap.InternalDropped,
 		RawQueueDepth:   snap.RawQueueDepth,
 		DBFlushErrors:   snap.DBFlushErrors,
+		PacketsPerSec:   snap.PacketsPerSec,
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

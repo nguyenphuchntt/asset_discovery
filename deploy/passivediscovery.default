@@ -8,7 +8,7 @@
 # DISCOVERY_MODE=live
 
 # Network interface (live mode requires NET_RAW capability)
-# DISCOVERY_IFACE=eth0
+DISCOVERY_INTERFACE=eth0
 
 # Output directory
 # DISCOVERY_OUTPUT=/var/lib/passivediscovery/output
