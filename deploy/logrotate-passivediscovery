@@ -1,0 +1,18 @@
+# Only needed if DISCOVERY_LOG_OUTPUT is set to a file path (not stdout).
+# Default setup sends logs to journald (stdout) — rotation is handled by
+# systemd automatically (SystemMaxUse, SystemKeepFree). No logrotate config
+# required unless you explicitly enable file-based logging.
+#
+# Usage (if file-based logging enabled):
+#   sudo cp deploy/logrotate-passivediscovery /etc/logrotate.d/passivediscovery
+#   sudo logrotate -d /etc/logrotate.d/passivediscovery   # dry-run test
+
+/var/lib/passivediscovery/output/discovery.log {
+    daily
+    rotate 7
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}

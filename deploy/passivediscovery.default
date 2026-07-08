@@ -1,11 +1,6 @@
 # /etc/default/passivediscovery
 # Override these variables by uncommenting lines and editing values.
-# /etc/default/passivediscovery
-# Override these variables by uncommenting lines and editing values.
 # systemd reads this file via EnvironmentFile=-/etc/default/passivediscovery
-
-# Capture mode (pcap | live)
-# DISCOVERY_MODE=live
 
 # Network interface (live mode requires NET_RAW capability)
 DISCOVERY_INTERFACE=eth0
@@ -22,8 +17,11 @@ DISCOVERY_INTERFACE=eth0
 # Log level: debug | info | warn | error
 # DISCOVERY_LOG_LEVEL=info
 
-# Verbose flag (-v, -vv, -vvv)
-# DISCOVERY_VERBOSE=
+# Log output: stdout (journald), stderr, or file path
+# Default: stdout → logs go to journald, use `journalctl -u passivediscovery -f` to view.
+# To write to a file instead (e.g. /var/log/passivediscovery/discovery.log),
+# set DISCOVERY_LOG_OUTPUT to a path — note: requires ReadWritePaths in .service.
+# DISCOVERY_LOG_OUTPUT=stdout
 
 # Keep generated JSON output in addition to DB
 # DISCOVERY_KEEP_JSON_OUTPUT=false
