@@ -23,6 +23,8 @@ type StatsSource interface {
 	PacketsReceived() uint64
 	AssetsCount() uint64
 	PacketsPerSec() float64
+	StatusCounts() (online, offline int)
+	Drops() uint64
 }
 
 type Persister struct {
@@ -114,7 +116,10 @@ func (p *Persister) Run(ctx context.Context) error {
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), p.opts.FlushTimeout)
 			defer cancel()
 			if err := p.Flush(shutdownCtx); err != nil {
-				p.logger.Error("final flush failed", slog.String("err", err.Error()))
+				p.logger.Error("event",
+				slog.String("event", "flush_failed"),
+				slog.String("err", err.Error()),
+			)
 				return err
 			}
 			return nil
@@ -142,7 +147,8 @@ func (p *Persister) Flush(ctx context.Context) error {
 
 	if err := p.saveWithRetry(saveCtx, batch); err != nil {
 		p.flushErrors.Add(1)
-		p.logger.Error("persist flush ultimately failed, batch dropped",
+		p.logger.Error("event",
+			slog.String("event", "flush_failed"),
 			slog.Int("assets", len(batch.Assets)),
 			slog.String("err", err.Error()),
 		)
@@ -152,6 +158,21 @@ func (p *Persister) Flush(ctx context.Context) error {
 	p.flushCount.Add(1)
 	dur := time.Since(start)
 	p.lastFlushDur.Store(int64(dur))
+
+	if p.stats != nil {
+		online, offline := p.stats.StatusCounts()
+		p.logger.Info("event",
+			slog.String("event", "metrics"),
+			slog.Uint64("packets", p.stats.PacketsReceived()),
+			slog.Uint64("obs", p.stats.AssetsCount()),
+			slog.Int("assets_online", online),
+			slog.Int("assets_offline", offline),
+			slog.Uint64("drops", p.stats.Drops()),
+			slog.Int64("flush_ms", dur.Milliseconds()),
+		)
+	}
+
+	// also log per-flush stats for DB monitoring
 	p.logger.Info("persist flush completed",
 		slog.Int("flush_assets", len(batch.Assets)),
 		slog.Int64("flush_duration_ms", dur.Milliseconds()),
@@ -167,7 +188,10 @@ func (p *Persister) Flush(ctx context.Context) error {
 			PacketsPerSec:   p.stats.PacketsPerSec(),
 		}
 		if err := p.repo.SaveStatistics(ctx, stat); err != nil {
-			p.logger.Warn("save statistics failed", slog.String("err", err.Error()))
+			p.logger.Warn("event",
+				slog.String("event", "stats_save_failed"),
+				slog.String("err", err.Error()),
+			)
 		}
 	}
 	return nil
@@ -210,7 +234,8 @@ func (p *Persister) saveWithRetry(ctx context.Context, batch pendingBatch) error
 		if errors.Is(err, context.Canceled) {
 			return err
 		}
-		p.logger.Warn("persist flush failed, will retry",
+		p.logger.Warn("event",
+			slog.String("event", "flush_retry"),
 			slog.Int("attempt", attempt+1),
 			slog.Int("max", max),
 			slog.String("err", err.Error()),

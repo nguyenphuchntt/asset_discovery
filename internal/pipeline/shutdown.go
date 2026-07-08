@@ -23,6 +23,9 @@ func ShutdownFlush(
 	shutdownCtx, flushCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer flushCancel()
 	if err := persister.Flush(shutdownCtx); err != nil {
-		logger.Error("final persist flush failed", slog.String("err", err.Error()))
+		logger.Error("event",
+			slog.String("event", "flush_failed"),
+			slog.String("err", err.Error()),
+		)
 	}
 }

@@ -1,9 +1,3 @@
-CREATE TABLE IF NOT EXISTS schema_migrations (
-    version INTEGER PRIMARY KEY,
-    name TEXT NOT NULL,
-    applied_at TEXT NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS assets (
     id TEXT PRIMARY KEY,
     status TEXT NOT NULL,
@@ -100,7 +94,3 @@ CREATE VIEW IF NOT EXISTS current_assets AS
     LEFT JOIN asset_hostnames h ON h.asset_id = a.id
     GROUP BY a.id;
 
--- Mark this schema as applied ---------------------------------------------------
-
-INSERT OR IGNORE INTO schema_migrations(version, name, applied_at)
-    VALUES (1, 'initial_persistence_schema', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));

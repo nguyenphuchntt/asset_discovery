@@ -78,7 +78,10 @@ func (h *handler) handleAssets(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := h.repo.ListAssets(ctx, filter)
 	if err != nil {
-		h.logger.Warn("ListAssets failed", slog.String("err", err.Error()))
+		h.logger.Warn("event",
+			slog.String("event", "list_assets_failed"),
+			slog.String("err", err.Error()),
+		)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
 	}
@@ -98,7 +101,11 @@ func (h *handler) handleAssetDetail(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := h.repo.GetAssetDetail(ctx, asset.AssetID(id))
 	if err != nil {
-		h.logger.Warn("GetAssetDetail failed", slog.String("err", err.Error()), slog.String("id", id))
+		h.logger.Warn("event",
+			slog.String("event", "get_asset_failed"),
+			slog.String("id", id),
+			slog.String("err", err.Error()),
+		)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
 	}
@@ -116,7 +123,10 @@ func (h *handler) handleVendors(w http.ResponseWriter, r *http.Request) {
 
 	vendors, err := h.repo.ListVendors(ctx)
 	if err != nil {
-		h.logger.Warn("ListVendors failed", slog.String("err", err.Error()))
+		h.logger.Warn("event",
+			slog.String("event", "list_vendors_failed"),
+			slog.String("err", err.Error()),
+		)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
 	}

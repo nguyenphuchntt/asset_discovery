@@ -73,7 +73,10 @@ func (s *Server) Run(ctx context.Context) error {
 		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := s.http.Shutdown(shutCtx); err != nil {
-			s.logger.Error("api shutdown error", slog.String("err", err.Error()))
+			s.logger.Error("event",
+				slog.String("event", "api_shutdown_error"),
+				slog.String("err", err.Error()),
+			)
 			return err
 		}
 		return nil

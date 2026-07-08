@@ -2,6 +2,7 @@ package asset
 
 import (
 	"context"
+	"log/slog"
 	"net"
 	"slices"
 	"strings"
@@ -29,6 +30,7 @@ type AssetManager interface {
 	EvictStale(now time.Time, evictAfter time.Duration) int
 	DrainDirty() []AssetSnapshot
 	RecordPacket()
+	RecordDrop()
 	PacketsReceived() uint64
 }
 
@@ -58,7 +60,9 @@ type Manager struct {
 	resolver    *ShardedResolver
 	vendor      VendorResolver
 	hydrator    Hydrator
+	logger      *slog.Logger
 	packetsRecv atomic.Uint64
+	dropped     atomic.Uint64
 	packetRate  *stats.PacketRate
 }
 
@@ -135,6 +139,10 @@ func WithVendorResolver(v VendorResolver) ManagerOption {
 	return func(m *Manager) { m.vendor = v }
 }
 
+func WithLogger(l *slog.Logger) ManagerOption {
+	return func(m *Manager) { m.logger = l }
+}
+
 func NewManager(_ IdentityResolver, opts ...ManagerOption) *Manager {
 	m := &Manager{
 		resolver:  NewShardedResolver(),
@@ -159,6 +167,8 @@ func (m *Manager) PacketsReceived() uint64  { return m.packetsRecv.Load() }
 func (m *Manager) PacketsPerSec() float64   { return m.packetRate.Rate() }
 func (m *Manager) PacketRate() *stats.PacketRate { return m.packetRate }
 func (m *Manager) SetInitialCounters(packets uint64) { m.packetsRecv.Store(packets) }
+func (m *Manager) RecordDrop() { m.dropped.Add(1) }
+func (m *Manager) Drops() uint64 { return m.dropped.Load() }
 func (m *Manager) AssetsCount() uint64 {
 	var total uint64
 	for _, s := range m.shards {
@@ -167,6 +177,24 @@ func (m *Manager) AssetsCount() uint64 {
 		s.mu.RUnlock()
 	}
 	return total
+}
+
+// StatusCounts returns (online, offline) counts by iterating the in-memory
+// map. Cheap enough at typical sizes; runs under per-shard read locks.
+func (m *Manager) StatusCounts() (online, offline int) {
+	for _, s := range m.shards {
+		s.mu.RLock()
+		for _, a := range s.assets {
+			switch a.Status {
+			case StatusOnline:
+				online++
+			case StatusOffline:
+				offline++
+			}
+		}
+		s.mu.RUnlock()
+	}
+	return
 }
 
 func (m *Manager) shardForIdx(idx int) *shard { return m.shards[idx] }
@@ -322,6 +350,13 @@ func (m *Manager) Sweep(now time.Time, offlineAfter time.Duration) int {
 				a.Status = StatusOffline
 				changed = true
 				transitions++
+				if m.logger != nil {
+					m.logger.Info("event",
+						slog.String("event", "asset_offline"),
+						slog.String("mac", a.MAC.String()),
+						slog.Time("last_seen", a.LastSeen),
+					)
+				}
 			}
 			if changed {
 				m.markDirty(sh, a.ID)
