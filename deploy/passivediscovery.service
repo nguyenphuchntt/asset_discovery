@@ -38,7 +38,16 @@ ProtectKernelTunables=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true
 
-# Environment (override via /etc/default/passivediscovery)
+# Defaults — these can be overridden in /etc/default/passivediscovery
+Environment=DISCOVERY_INTERFACE=eth0
+Environment=DISCOVERY_OUTPUT=/var/lib/passivediscovery/output
+Environment=DISCOVERY_DB=/var/lib/passivediscovery/discovery.db
+Environment=DISCOVERY_OUI=/opt/passivediscovery/oui.csv
+Environment=DISCOVERY_API_ADDR=:8080
+Environment=DISCOVERY_LOG_LEVEL=info
+Environment=DISCOVERY_LOG_OUTPUT=stdout
+
+# Override via /etc/default/passivediscovery (loaded after Environment=, takes precedence)
 EnvironmentFile=-/etc/default/passivediscovery
 
 [Install]
