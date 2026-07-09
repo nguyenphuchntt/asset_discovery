@@ -65,13 +65,10 @@ if [[ ! -f /etc/default/passivediscovery ]]; then
         /etc/default/passivediscovery
 fi
 
-echo "==> Granting live capture capabilities (live mode)"
-# Add NET_RAW only — keep service as non-root user.
-# systemd still allows AmbientCapabilities via setcap on the binary.
-if command -v setcap >/dev/null 2>&1; then
-    setcap cap_net_raw,cap_net_admin+ep "$INSTALL_DIR/discovery" || \
-        echo "  WARN: setcap failed — live mode will need NET_RAW reconfiguration"
-fi
+echo "==> Granting live capture capabilities (via AmbientCapabilities in unit)"
+# Capabilities are now granted by systemd via AmbientCapabilities in the unit file,
+# not via setcap on the binary. This works with the sandbox (ProtectSystem, etc.)
+# without needing to bypass the sandbox.
 
 echo "==> Reloading systemd"
 systemctl daemon-reload

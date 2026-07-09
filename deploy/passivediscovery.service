@@ -20,8 +20,6 @@ ExecStart=/opt/passivediscovery/discovery \
     --log-output ${DISCOVERY_LOG_OUTPUT}
 Restart=on-failure
 RestartSec=10
-StartLimitIntervalSec=300
-StartLimitBurst=5
 
 # Logging — send to journald
 StandardOutput=journal
@@ -37,6 +35,8 @@ ProtectHome=true
 ProtectKernelTunables=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
 
 # Defaults — these can be overridden in /etc/default/passivediscovery
 Environment=DISCOVERY_INTERFACE=eth0
