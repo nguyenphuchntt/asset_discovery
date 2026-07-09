@@ -111,6 +111,7 @@ func run(args []string) error {
 					slog.Int("limit", cfg.LoadLimit),
 					slog.Duration("window", cfg.LoadWindow),
 				)
+				manager.Sweep(time.Now(), cfg.OfflineAfter)
 			}
 		} else {
 			logger.Warn("event",

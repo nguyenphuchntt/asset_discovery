@@ -1,8 +1,8 @@
 # Passive Asset Network Discovery System
 
-> Passive network asset discovery — capture packets, build a real-time inventory of every device on the wire.
+> Passive network asset discovery, build a real-time inventory of every device on the wire.
 
-`passivediscovery` listens passively to a network interface (or replays a PCAP file), extracts device
+`passivediscovery` listens passively to a network interface, extracts device
 fingerprints from common protocols (ARP, DHCP, mDNS, SSDP, DHCPv6), and exposes them through an
 embedded web dashboard and a JSON API. No active probing, no SNMP, no agents on endpoints — purely
 eavesdropping on traffic the devices already broadcast.
@@ -25,7 +25,7 @@ a vanilla-JS dashboard embedded into the binary itself.
 
 ---
 
-## Quick Start — Docker (live capture)
+## Quick Start - Docker (live capture)
 
 ```bash
 # 1. Configure
@@ -74,7 +74,7 @@ docker compose exec discovery sh -c 'ls -lh /data/db'
 
 ---
 
-## Quick Start — Run from Source
+## Quick Start - Run from Source
 
 ```bash
 # Build
@@ -102,16 +102,33 @@ sudo setcap cap_net_raw,cap_net_admin+ep bin/discovery
 
 ---
 
-## Installation — Systemd (bare-metal Linux)
+## Installation - Systemd
 
 **Prerequisites:** Go 1.21+ and `libpcap-dev` (or equivalent) must be installed first.
 
 ```bash
+# Install libpcap
+sudo apt update
+sudo apt install -y libpcap-dev
+
+# Install golang
+cd ~/Downloads
+wget https://go.dev/dl/go1.25.0.linux-amd64.tar.gz
+sudo tar -C /usr/local -xzf go1.25.0.linux-amd64.tar.gz
+nano ~/.bashrc
+# Add the following line into the end of .bashrc file
+export PATH=$PATH:/usr/local/go/bin
+# Save the file, and then
+source ~/.bashrc
+# Create symlink for root user 
+sudo ln -s /usr/local/go/bin/go /usr/local/bin/go
+```
+
+**Install the system**
+
+```bash
 cd deploy
-sudo ./install.sh            # builds binary, creates user, installs systemd unit
-# The installer copies /etc/default/passivediscovery from deploy/passivediscovery.default.
-# It already contains DISCOVERY_INTERFACE=eth0 as a sensible default.
-# Change "eth0" to match your actual interface name:
+sudo ./install.sh            # builds binary, creates 
 sudo sed -i 's/^DISCOVERY_INTERFACE=.*/DISCOVERY_INTERFACE=YOUR_INTERFACE/' /etc/default/passivediscovery
 # Then restart the service:
 sudo systemctl restart passivediscovery

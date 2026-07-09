@@ -48,9 +48,9 @@ mkdir -p "$LOG_DIR"
 chown -R "$SERVICE_USER:$SERVICE_GROUP" "$DATA_DIR" "$LOG_DIR"
 
 # Copy OUI CSV from repo if present
-if [[ -f "$PROJECT_DIR/data/oui.csv" ]]; then
+if [[ -f "$PROJECT_DIR/internal/oui/oui.csv" ]]; then
     install -m 0644 -o "$SERVICE_USER" -g "$SERVICE_GROUP" \
-        "$PROJECT_DIR/data/oui.csv" "$INSTALL_DIR/oui.csv"
+        "$PROJECT_DIR/internal/oui/oui.csv" "$INSTALL_DIR/oui.csv"
 fi
 
 # Fix binary perms
