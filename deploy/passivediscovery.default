@@ -6,25 +6,19 @@
 DISCOVERY_INTERFACE=eth0
 
 # Output directory
-# DISCOVERY_OUTPUT=/var/lib/passivediscovery/output
+DISCOVERY_OUTPUT=/var/lib/passivediscovery/output
 
 # SQLite DB path
-# DISCOVERY_DB=/var/lib/passivediscovery/discovery.db
+DISCOVERY_DB=/var/lib/passivediscovery/discovery.db
 
-# Number of parallel analysis workers (0 = single worker)
-# DISCOVERY_WORKERS=4
+# OUI lookup table (vendor resolution from MAC prefix)
+DISCOVERY_OUI=/opt/passivediscovery/oui.csv
+
+# API listen address (empty = disabled)
+DISCOVERY_API_ADDR=:8080
 
 # Log level: debug | info | warn | error
-# DISCOVERY_LOG_LEVEL=info
+DISCOVERY_LOG_LEVEL=info
 
 # Log output: stdout (journald), stderr, or file path
-# Default: stdout → logs go to journald, use `journalctl -u passivediscovery -f` to view.
-# To write to a file instead (e.g. /var/log/passivediscovery/discovery.log),
-# set DISCOVERY_LOG_OUTPUT to a path — note: requires ReadWritePaths in .service.
-# DISCOVERY_LOG_OUTPUT=stdout
-
-# Keep generated JSON output in addition to DB
-# DISCOVERY_KEEP_JSON_OUTPUT=false
-
-# Run identifier (auto-generated if empty)
-# DISCOVERY_RUN_ID=
+DISCOVERY_LOG_OUTPUT=stdout

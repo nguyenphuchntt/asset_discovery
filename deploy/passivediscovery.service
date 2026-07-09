@@ -9,7 +9,15 @@ Type=simple
 User=discovery
 Group=discovery
 WorkingDirectory=/opt/passivediscovery
-ExecStart=/opt/passivediscovery/discovery --interface eth0 --output /var/lib/passivediscovery/output --db /var/lib/passivediscovery/discovery.db --log-output stdout --oui /opt/passivediscovery/oui.csv
+ExecStart=/opt/passivediscovery/discovery \
+    --interface ${DISCOVERY_INTERFACE} \
+    --output ${DISCOVERY_OUTPUT} \
+    --db ${DISCOVERY_DB} \
+    --oui ${DISCOVERY_OUI} \
+    --api-addr ${DISCOVERY_API_ADDR} \
+    --ui \
+    --log-level ${DISCOVERY_LOG_LEVEL} \
+    --log-output ${DISCOVERY_LOG_OUTPUT}
 Restart=on-failure
 RestartSec=10
 StartLimitIntervalSec=300
